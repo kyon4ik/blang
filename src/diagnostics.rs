@@ -1,10 +1,119 @@
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use bstr::{BStr, ByteSlice};
 
+pub struct Diagnostics {
+    src: Rc<[u8]>,
+    errors: Vec<DiagError>,
+    src_map: SourceMap,
+}
+
+#[derive(Clone, Debug)]
+pub struct DiagError {
+    kind: DiagErrorKind,
+    span: Span,
+}
+
+#[non_exhaustive]
+#[derive(Clone, Debug)]
+pub enum DiagErrorKind {
+    Unexpected {
+        ty: Cow<'static, str>,
+        expected: Cow<'static, str>,
+        found: Cow<'static, str>,
+    },
+    Other(Cow<'static, str>),
+}
+
+impl Diagnostics {
+    pub fn new(src: &[u8], path: &Path, max_errors: usize) -> Self {
+        assert!(max_errors > 0);
+
+        let errors = Vec::with_capacity(max_errors);
+        let src: Rc<[u8]> = Rc::from(src);
+        let src_map = SourceMap::new(src.clone(), path);
+
+        Self {
+            src,
+            errors,
+            src_map,
+        }
+    }
+
+    pub fn error(&mut self, kind: DiagErrorKind, span: Span) {
+        // max errors reached
+        if self.errors.spare_capacity_mut().is_empty() {
+            return;
+        }
+
+        self.errors.push(DiagError::new(kind, span));
+    }
+
+    pub fn has_errors(&self) -> bool {
+        !self.errors.is_empty()
+    }
+
+    // TODO: better diagnostics
+    pub fn print_errors(&self) {
+        for error in &self.errors {
+            let (start_loc, _end_loc) = self.src_map.locate_span(error.span).unwrap();
+
+            use DiagErrorKind::*;
+            print!(
+                "{}:{}:{} | [ERROR] ",
+                self.src_map.file_path().display(),
+                start_loc.line,
+                start_loc.column
+            );
+            match &error.kind {
+                Unexpected {
+                    ty,
+                    expected,
+                    found,
+                } => println!("Expected {} {}, found {}", ty, expected, found),
+                Other(msg) => println!("{}", msg),
+            }
+            println!(
+                "HERE -> {}",
+                BStr::new(&self.src[error.span.start..error.span.end])
+            );
+        }
+    }
+}
+
+impl DiagError {
+    pub fn new(kind: DiagErrorKind, span: Span) -> Self {
+        Self { kind, span }
+    }
+}
+
+impl DiagErrorKind {
+    pub fn unexpected<I, J, K>(ty: I, expected: J, found: K) -> Self
+    where
+        I: Into<Cow<'static, str>>,
+        J: Into<Cow<'static, str>>,
+        K: Into<Cow<'static, str>>,
+    {
+        Self::Unexpected {
+            ty: ty.into(),
+            expected: expected.into(),
+            found: found.into(),
+        }
+    }
+
+    pub fn other<I>(msg: I) -> Self
+    where
+        I: Into<Cow<'static, str>>,
+    {
+        Self::Other(msg.into())
+    }
+}
+
 #[derive(Debug)]
-pub struct SourceMap<'s> {
-    src: &'s BStr,
+pub struct SourceMap {
+    src: Rc<[u8]>,
     path: PathBuf,
     line_starts: Vec<usize>,
 }
@@ -21,10 +130,9 @@ pub struct Span {
     pub end: usize,
 }
 
-impl<'s> SourceMap<'s> {
-    pub fn new(src: &'s [u8], path: &Path) -> Self {
+impl SourceMap {
+    pub fn new(src: Rc<[u8]>, path: &Path) -> Self {
         let mut line_starts = Vec::new();
-        let src = BStr::new(src);
 
         let mut bytes_read = 0;
         for line in src.lines_with_terminator() {

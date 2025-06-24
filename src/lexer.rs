@@ -1,8 +1,11 @@
-use bstr::{BStr, BString, ByteSlice};
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use bstr::BStr;
 use token::{MAX_NAME_LEN, MAX_NUMBER_LEN};
 pub use token::{Token, TokenKind};
 
-use crate::diagnostics::Span;
+use crate::diagnostics::{DiagErrorKind, Diagnostics, Span};
 
 pub(crate) mod interner;
 pub mod token;
@@ -12,101 +15,131 @@ const EOF_CHAR: u8 = b'\0';
 pub struct Lexer<'s> {
     src: &'s BStr,
     pos: usize,
+    diag: Rc<RefCell<Diagnostics>>,
 }
 
 impl<'s> Lexer<'s> {
-    pub fn new(src: &'s [u8]) -> Self {
+    pub fn new(src: &'s [u8], diag: Rc<RefCell<Diagnostics>>) -> Self {
         Self {
             src: BStr::new(src),
             pos: 0,
+            diag,
         }
+    }
+
+    fn error(&self, kind: DiagErrorKind, span: Span) {
+        self.diag.borrow_mut().error(kind, span)
     }
 
     pub fn next_token(&mut self) -> Token {
         use TokenKind::*;
 
-        self.skip();
-        if self.is_eof() {
-            return Token::eof();
-        }
+        let (kind, start) = loop {
+            self.skip();
+            if self.is_eof() {
+                return Token::eof();
+            }
 
-        let start = self.pos;
-        let kind = match self.next() {
-            c if c.is_ascii_alphabetic() || c == b'_' => self.read_name_or_kw(c),
-            c if c.is_ascii_digit() => self.read_number(c),
-            b'\'' => self.read_char(),
-            b'\"' => self.read_string(),
-            b'(' => OParen,
-            b')' => CParen,
+            let start = self.pos;
+            let kind = match self.next() {
+                c if c.is_ascii_alphabetic() || c == b'_' => self.read_name_or_kw(c, start),
+                c if c.is_ascii_digit() => self.read_number(c, start),
+                b'\'' => self.read_char(),
+                b'\"' => self.read_string(start),
+                b'(' => OParen,
+                b')' => CParen,
 
-            b'[' => OBrack,
-            b']' => CBrack,
+                b'[' => OBrack,
+                b']' => CBrack,
 
-            b'{' => OBrace,
-            b'}' => CBrace,
+                b'{' => OBrace,
+                b'}' => CBrace,
 
-            b';' => Semi,
-            b',' => Comma,
-            b':' => Colon,
-            b'?' => QMark,
-            b'!' => self.next_if(b'=', BangEq, Bang),
-            b'|' => Pipe,
-            b'&' => Amps,
-            b'=' => self.next_if(b'=', EqEq, Eq),
-            b'<' => match self.peek() {
-                b'=' => LtEq,
-                b'<' => LtLt,
-                _ => Lt,
-            },
-            b'>' => match self.peek() {
-                b'=' => GtEq,
-                b'>' => GtGt,
-                _ => Gt,
-            },
-            b'-' => self.next_if(b'-', MinusMinus, Minus),
-            b'+' => self.next_if(b'+', PlusPlus, Plus),
-            b'%' => Percent,
-            b'*' => Star,
-            b'/' => Slash,
+                b';' => Semi,
+                b',' => Comma,
+                b':' => Colon,
+                b'?' => QMark,
+                b'!' => self.next_if(b'=', BangEq, Bang),
+                b'|' => Pipe,
+                b'&' => Amps,
+                b'=' => self.next_if(b'=', EqEq, Eq),
+                b'<' => match self.peek() {
+                    b'=' => LtEq,
+                    b'<' => LtLt,
+                    _ => Lt,
+                },
+                b'>' => match self.peek() {
+                    b'=' => GtEq,
+                    b'>' => GtGt,
+                    _ => Gt,
+                },
+                b'-' => self.next_if(b'-', MinusMinus, Minus),
+                b'+' => self.next_if(b'+', PlusPlus, Plus),
+                b'%' => Percent,
+                b'*' => Star,
+                b'/' => Slash,
 
-            // TODO: better diagnostics
-            c => panic!("Unexpected symbol: {}", escape(c)),
+                c => {
+                    self.error(
+                        DiagErrorKind::unexpected("symbol", "valid B symbol", escape(c)),
+                        Span::new(start, self.pos),
+                    );
+                    continue;
+                }
+            };
+
+            break (kind, start);
         };
 
         Token::new(kind, Span::new(start, self.pos))
     }
 
-    fn read_name_or_kw(&mut self, first: u8) -> TokenKind {
+    fn read_name_or_kw(&mut self, first: u8, start: usize) -> TokenKind {
         let mut symbols = [EOF_CHAR; MAX_NAME_LEN];
         symbols[0] = first;
 
         let mut i = 1;
+        let mut too_long = false;
         while self.peek().is_ascii_alphanumeric() || self.peek() == b'_' {
             if i < MAX_NAME_LEN {
                 symbols[i] = self.next();
                 i += 1;
             } else {
+                too_long = true;
                 self.next();
-                // TODO: diagnostics
             }
+        }
+
+        if too_long {
+            self.error(
+                DiagErrorKind::other(format!("Name is longer than {} chars", MAX_NAME_LEN)),
+                Span::new(start, self.pos),
+            );
         }
 
         TokenKind::name_or_keyword(symbols)
     }
 
-    fn read_number(&mut self, first: u8) -> TokenKind {
+    fn read_number(&mut self, first: u8, start: usize) -> TokenKind {
         let mut digits = [EOF_CHAR; MAX_NUMBER_LEN];
         digits[0] = first;
 
         let mut i = 1;
+        let mut too_long = false;
         while self.peek().is_ascii_digit() {
             if i < MAX_NUMBER_LEN {
                 digits[i] = self.next();
                 i += 1;
             } else {
+                too_long = true;
                 self.next();
-                // TODO: diagnostics
             }
+        }
+        if too_long {
+            self.error(
+                DiagErrorKind::other(format!("Number is longer than {} digits", MAX_NUMBER_LEN)),
+                Span::new(start, self.pos),
+            );
         }
 
         TokenKind::Number(digits)
@@ -117,14 +150,18 @@ impl<'s> Lexer<'s> {
         char[0] = self.next();
         if char[0] == b'\'' {
             char[0] = EOF_CHAR;
-            // TODO: better diagnostics
-            panic!("Expected character, found '");
+            self.error(
+                DiagErrorKind::unexpected("symbol", "character", "'"),
+                Span::new(self.pos - 1, self.pos),
+            );
         } else {
             char[1] = self.next();
             if char[1] != b'\'' {
                 if self.peek() != b'\'' {
-                    // TODO: better diagnostics
-                    panic!("Expected ', found {}", escape(self.peek()));
+                    self.error(
+                        DiagErrorKind::unexpected("symbol", "'", escape(self.peek())),
+                        Span::new(self.pos, self.pos + 1),
+                    );
                 } else {
                     self.next();
                 }
@@ -136,17 +173,16 @@ impl<'s> Lexer<'s> {
         TokenKind::Char(char)
     }
 
-    fn read_string(&mut self) -> TokenKind {
-        // FIXME: Do not use Vec here, allocate once
-        let mut string = BString::new(vec![]);
-
+    fn read_string(&mut self, start: usize) -> TokenKind {
         while !self.is_eof() && self.peek() != b'"' {
-            string.push(self.next());
+            self.next();
         }
 
-        self.next();
+        let kind = TokenKind::string(&self.src[start + 1..self.pos]);
 
-        TokenKind::string(string.as_bstr())
+        // skip "
+        self.next();
+        kind
     }
 
     fn next_if(&mut self, expect: u8, success: TokenKind, fail: TokenKind) -> TokenKind {
@@ -212,6 +248,6 @@ impl<'s> Lexer<'s> {
     }
 }
 
-fn escape(c: u8) -> BString {
-    c.escape_ascii().collect()
+fn escape(c: u8) -> String {
+    String::from_utf8_lossy(&c.escape_ascii().collect::<Vec<_>>()).into_owned()
 }

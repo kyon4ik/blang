@@ -1,8 +1,10 @@
+use std::cell::RefCell;
 use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
+use std::rc::Rc;
 
-use blang::diagnostics::SourceMap;
+use blang::diagnostics::{Diagnostics, SourceMap};
 use blang::lexer::{Lexer, TokenKind};
 use clap::Parser;
 
@@ -10,6 +12,8 @@ use clap::Parser;
 #[command(version, about)]
 struct Args {
     input: PathBuf,
+    #[arg(short, long, default_value_t = 5)]
+    max_errors: usize,
 }
 
 fn main() {
@@ -19,24 +23,39 @@ fn main() {
     let mut src = Vec::new();
     input_file.read_to_end(&mut src).unwrap();
 
-    let mut lexer = Lexer::new(&src);
-    let src_map = SourceMap::new(&src, &args.input);
+    let src: Rc<[u8]> = Rc::from(src);
+    let src_map = SourceMap::new(src.clone(), &args.input);
+    let diagnostics = Rc::new(RefCell::new(Diagnostics::new(
+        &src,
+        &args.input,
+        args.max_errors,
+    )));
+    let mut lexer = Lexer::new(&src, diagnostics.clone());
 
-    let mut prev_line = 0;
+    let mut tokens = Vec::new();
     loop {
         let token = lexer.next_token();
-
         if token.kind == TokenKind::Eof {
             break;
         }
+        tokens.push(token);
+    }
 
-        let (start_loc, end_loc) = src_map.locate_span(token.span).unwrap();
-        assert_eq!(start_loc.line, end_loc.line);
-        if prev_line != start_loc.line {
-            println!("{:>3} | {}", start_loc.line, token.kind);
-            prev_line = start_loc.line;
-        } else {
-            println!("     | {}", token.kind);
+    if diagnostics.borrow().has_errors() {
+        println!("Failed due to following errors:");
+        diagnostics.borrow().print_errors();
+    } else {
+        let mut prev_line = 0;
+
+        for token in tokens {
+            let (start_loc, end_loc) = src_map.locate_span(token.span).unwrap();
+            assert_eq!(start_loc.line, end_loc.line);
+            if prev_line != start_loc.line {
+                println!("{:>3} | {}", start_loc.line, token.kind);
+                prev_line = start_loc.line;
+            } else {
+                println!("     | {}", token.kind);
+            }
         }
     }
 }
