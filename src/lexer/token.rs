@@ -1,6 +1,8 @@
 use std::fmt;
 use std::sync::LazyLock;
 
+use bstr::BStr;
+
 use super::interner::{InternedStr, StringInterner};
 
 pub const MAX_NAME_LEN: usize = 8;
@@ -152,7 +154,7 @@ impl TokenKind {
         }
     }
 
-    pub fn string(str: &[u8]) -> Self {
+    pub fn string(str: &BStr) -> Self {
         Self::String(INTERNER.intern(str))
     }
 }
@@ -160,14 +162,14 @@ impl TokenKind {
 impl fmt::Display for TokenKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Name(name) => write!(f, "Name({})", String::from_utf8_lossy(name)),
-            Self::Number(number) => write!(f, "Number({})", String::from_utf8_lossy(number)),
-            Self::Char(char) => write!(f, "Char({})", String::from_utf8_lossy(char)),
+            Self::Name(name) => write!(f, "Name({})", BStr::new(name)),
+            Self::Number(number) => write!(f, "Number({})", BStr::new(number)),
+            Self::Char(char) => write!(f, "Char({})", BStr::new(char)),
             Self::String(string) => write!(
                 f,
                 "String({:x} \"{}\")",
                 string.index(),
-                String::from_utf8_lossy(INTERNER.get_string(*string))
+                BStr::new(INTERNER.get_string(*string))
             ),
             other => write!(f, "{:?}", other),
         }

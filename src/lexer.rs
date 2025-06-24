@@ -1,3 +1,4 @@
+use bstr::{BStr, BString, ByteSlice};
 use token::{MAX_NAME_LEN, MAX_NUMBER_LEN};
 pub use token::{Span, Token, TokenKind};
 
@@ -7,13 +8,16 @@ pub mod token;
 const EOF_CHAR: u8 = b'\0';
 
 pub struct Lexer<'s> {
-    src: &'s [u8],
+    src: &'s BStr,
     pos: usize,
 }
 
 impl<'s> Lexer<'s> {
     pub fn new(src: &'s [u8]) -> Self {
-        Self { src, pos: 0 }
+        Self {
+            src: BStr::new(src),
+            pos: 0,
+        }
     }
 
     pub fn next_token(&mut self) -> Token {
@@ -132,7 +136,7 @@ impl<'s> Lexer<'s> {
 
     fn read_string(&mut self) -> TokenKind {
         // FIXME: Do not use Vec here, allocate once
-        let mut string = Vec::new();
+        let mut string = BString::new(vec![]);
 
         while !self.is_eof() && self.peek() != b'"' {
             string.push(self.next());
@@ -140,7 +144,7 @@ impl<'s> Lexer<'s> {
 
         self.next();
 
-        TokenKind::string(&string)
+        TokenKind::string(string.as_bstr())
     }
 
     fn next_if(&mut self, expect: u8, success: TokenKind, fail: TokenKind) -> TokenKind {
@@ -206,7 +210,6 @@ impl<'s> Lexer<'s> {
     }
 }
 
-fn escape(c: u8) -> String {
-    let bytes = c.escape_ascii().collect::<Vec<_>>();
-    String::from_utf8(bytes).unwrap()
+fn escape(c: u8) -> BString {
+    c.escape_ascii().collect()
 }

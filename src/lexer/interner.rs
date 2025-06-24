@@ -2,12 +2,14 @@ use std::collections::HashMap;
 use std::slice;
 use std::sync::Mutex;
 
+use bstr::{BStr, ByteSlice};
+
 use crate::arena::Arena;
 
 // TODO: use faster hash
 // TODO: maybe use indexed hashmap?
 pub struct StringInterner {
-    map: Mutex<HashMap<&'static [u8], usize>>,
+    map: Mutex<HashMap<&'static BStr, usize>>,
     arena: Arena<u8>,
 }
 
@@ -22,25 +24,25 @@ impl StringInterner {
         }
     }
 
-    pub fn intern(&self, string: &[u8]) -> InternedStr {
+    pub fn intern(&self, string: &BStr) -> InternedStr {
         let mut map = self.map.lock().unwrap();
         InternedStr(
             map.get(string).copied().unwrap_or_else(|| {
-                let interned = self.arena.alloc_extend(string.iter().copied()) as *const [u8];
+                let interned = self.arena.alloc_extend(string.bytes()) as *const [u8];
                 let id = interned as *const u8 as usize;
 
                 // SAFETY: extends lifetime to static, this is safe because arena is never
                 // deallocated while map exists
-                map.insert(unsafe { &*interned }, id);
+                map.insert(BStr::new(unsafe { &*interned }), id);
                 id
             }),
             string.len(),
         )
     }
 
-    pub fn get_string(&self, id: InternedStr) -> &[u8] {
+    pub fn get_string(&self, id: InternedStr) -> &BStr {
         // SAFETY: this is safe because `intern` creates valid pointer and size
-        unsafe { slice::from_raw_parts(id.0 as *const u8, id.1) }
+        BStr::new(unsafe { slice::from_raw_parts(id.0 as *const u8, id.1) })
     }
 }
 
