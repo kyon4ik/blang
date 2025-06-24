@@ -3,6 +3,8 @@ use std::sync::LazyLock;
 
 use bstr::BStr;
 
+use crate::diagnostics::Span;
+
 use super::interner::{InternedStr, StringInterner};
 
 pub const MAX_NAME_LEN: usize = 8;
@@ -32,12 +34,6 @@ const KEYWORDS: [([u8; MAX_NAME_LEN], Kw); 8] = [
 pub struct Token {
     pub kind: TokenKind,
     pub span: Span,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct Span {
-    pub start: usize,
-    pub end: usize,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -120,16 +116,6 @@ pub enum Kw {
     While,
     Switch,
     Goto,
-}
-
-impl Span {
-    pub fn new(start: usize, end: usize) -> Self {
-        Self { start, end }
-    }
-
-    pub fn empty() -> Self {
-        Self::new(0, 0)
-    }
 }
 
 impl Token {

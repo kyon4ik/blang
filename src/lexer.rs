@@ -1,6 +1,8 @@
 use bstr::{BStr, BString, ByteSlice};
 use token::{MAX_NAME_LEN, MAX_NUMBER_LEN};
-pub use token::{Span, Token, TokenKind};
+pub use token::{Token, TokenKind};
+
+use crate::diagnostics::Span;
 
 pub(crate) mod interner;
 pub mod token;
