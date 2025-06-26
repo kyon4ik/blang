@@ -2,7 +2,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::ast::{
-    AutoDecl, Const, ConstKind, DefAst, DefKind, ExprAst, ImmVal, Name, Node, StmtAst, UnOp,
+    AutoDecl, Char, Const, ConstKind, DefAst, DefKind, ExprAst, ImmVal, Name, Node, StmtAst, UnOp,
+    VectorSize,
 };
 use crate::diagnostics::{DiagErrorKind, Diagnostics, Span};
 use crate::lexer::token::Kw;
@@ -72,9 +73,9 @@ impl<'s> Parser<'s> {
         let size = if self.expect_opt(TokenKind::OBrack) {
             let size = self.parse_const_opt();
             self.expect(TokenKind::CBrack)?;
-            size
+            size.map(VectorSize::Def).unwrap_or(VectorSize::Zero)
         } else {
-            None
+            VectorSize::Undef
         };
 
         let list = self.parse_any_comma(|p| p.parse_imm_val(), TokenKind::Semi)?;
@@ -279,11 +280,7 @@ impl<'s> Parser<'s> {
         self.next_token();
 
         let rhs = self.parse_expr_assign()?;
-        Some(Node::expr(ExprAst::Assign {
-            op,
-            lvalue: lhs,
-            rvalue: rhs,
-        }))
+        Some(Node::expr(ExprAst::Assign { op, lhs, rhs }))
     }
 
     #[inline]
@@ -337,8 +334,8 @@ impl<'s> Parser<'s> {
                 let rhs = self.parse_expr_binary(rbp)?;
                 lhs = ExprAst::Binary {
                     op,
-                    left: Node::expr(lhs),
-                    right: rhs,
+                    lhs: Node::expr(lhs),
+                    rhs,
                 };
             } else {
                 let (lbp, rbp) = (3, 2);
@@ -413,7 +410,7 @@ impl<'s> Parser<'s> {
             }
             TokenKind::Char(char) => {
                 self.next_token();
-                ExprAst::Const(Const::new(ConstKind::Char(char), span))
+                ExprAst::Const(Const::new(ConstKind::Char(Char(char)), span))
             }
             TokenKind::String(str) => {
                 self.next_token();
@@ -557,10 +554,10 @@ impl<'s> Parser<'s> {
 
     fn parse_imm_val(&mut self) -> Option<ImmVal> {
         let Token { kind, span } = self.peek_token();
-        Some(match kind {
+        let val = match kind {
             TokenKind::Name(name) => ImmVal::Name(Name::new(name, span)),
             TokenKind::Number(num) => ImmVal::Const(Const::new(ConstKind::Number(num), span)),
-            TokenKind::Char(char) => ImmVal::Const(Const::new(ConstKind::Char(char), span)),
+            TokenKind::Char(char) => ImmVal::Const(Const::new(ConstKind::Char(Char(char)), span)),
             TokenKind::String(str) => ImmVal::Const(Const::new(ConstKind::String(str), span)),
             kind => {
                 self.error(
@@ -569,7 +566,9 @@ impl<'s> Parser<'s> {
                 );
                 return None;
             }
-        })
+        };
+        self.next_token();
+        Some(val)
     }
 
     fn parse_const(&mut self) -> Option<Const> {
@@ -584,14 +583,16 @@ impl<'s> Parser<'s> {
         res
     }
 
+    // TODO: MAybe return result?
     fn parse_const_opt(&mut self) -> Option<Const> {
         let Token { kind, span } = self.peek_token();
         let cnst_kind = match kind {
             TokenKind::Number(num) => ConstKind::Number(num),
-            TokenKind::Char(char) => ConstKind::Char(char),
+            TokenKind::Char(char) => ConstKind::Char(Char(char)),
             TokenKind::String(str) => ConstKind::String(str),
             _ => return None,
         };
+        self.next_token();
         Some(Const {
             kind: cnst_kind,
             span,

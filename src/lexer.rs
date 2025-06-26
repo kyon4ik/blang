@@ -2,8 +2,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use bstr::BStr;
+use token::MAX_NAME_LEN;
 pub use token::{BinOp, Token, TokenKind};
-use token::{MAX_NAME_LEN, MAX_NUMBER_LEN};
 
 use crate::diagnostics::{DiagErrorKind, Diagnostics, Span};
 
@@ -137,54 +137,31 @@ impl<'s> Lexer<'s> {
     }
 
     fn read_name_or_kw(&mut self, first: u8, start: usize) -> TokenKind {
-        let mut symbols = [EOF_CHAR; MAX_NAME_LEN];
-        symbols[0] = first;
+        debug_assert!(first.is_ascii_alphabetic());
 
-        let mut i = 1;
-        let mut too_long = false;
         while self.peek().is_ascii_alphanumeric() || self.peek() == b'_' {
-            if i < MAX_NAME_LEN {
-                symbols[i] = self.next();
-                i += 1;
-            } else {
-                too_long = true;
-                self.next();
-            }
+            self.next();
         }
 
-        if too_long {
+        // FIXME: make a warning (error when --legacy flag)
+        if self.pos - start > MAX_NAME_LEN {
             self.error(
                 DiagErrorKind::other(format!("Name is longer than {} chars", MAX_NAME_LEN)),
                 Span::new(start, self.pos),
             );
         }
 
-        TokenKind::name_or_keyword(symbols)
+        TokenKind::name_or_keyword(&self.src[start..self.pos])
     }
 
     fn read_number(&mut self, first: u8, start: usize) -> TokenKind {
-        let mut digits = [EOF_CHAR; MAX_NUMBER_LEN];
-        digits[0] = first;
+        debug_assert!(first.is_ascii_digit());
 
-        let mut i = 1;
-        let mut too_long = false;
         while self.peek().is_ascii_digit() {
-            if i < MAX_NUMBER_LEN {
-                digits[i] = self.next();
-                i += 1;
-            } else {
-                too_long = true;
-                self.next();
-            }
-        }
-        if too_long {
-            self.error(
-                DiagErrorKind::other(format!("Number is longer than {} digits", MAX_NUMBER_LEN)),
-                Span::new(start, self.pos),
-            );
+            self.next();
         }
 
-        TokenKind::Number(digits)
+        TokenKind::number(&self.src[start..self.pos])
     }
 
     fn read_char(&mut self) -> TokenKind {

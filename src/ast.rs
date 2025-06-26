@@ -1,51 +1,13 @@
-use std::ops::{Deref, DerefMut};
-use std::sync::LazyLock;
+use bstr::BStr;
+pub use node::Node;
 
-use crate::arena::Arena;
 use crate::diagnostics::Span;
 use crate::lexer::BinOp;
 use crate::lexer::interner::InternedStr;
-use crate::lexer::token::{MAX_CHAR_LEN, MAX_NAME_LEN, MAX_NUMBER_LEN};
+use crate::lexer::token::MAX_CHAR_LEN;
 
+pub mod node;
 pub mod visit;
-
-static STMT_NODE_ARENA: LazyLock<Arena<StmtAst>> = LazyLock::new(Arena::new);
-static EXPR_NODE_ARENA: LazyLock<Arena<ExprAst>> = LazyLock::new(Arena::new);
-
-#[derive(Debug)]
-pub struct Node<T: 'static> {
-    inner: &'static mut T,
-}
-
-impl Node<ExprAst> {
-    pub fn expr(ast: ExprAst) -> Self {
-        Self {
-            inner: EXPR_NODE_ARENA.alloc(ast),
-        }
-    }
-}
-
-impl Node<StmtAst> {
-    pub fn stmt(ast: StmtAst) -> Self {
-        Self {
-            inner: STMT_NODE_ARENA.alloc(ast),
-        }
-    }
-}
-
-impl<T> Deref for Node<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        self.inner
-    }
-}
-
-impl<T> DerefMut for Node<T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.inner
-    }
-}
 
 #[derive(Debug)]
 pub struct DefAst {
@@ -56,14 +18,20 @@ pub struct DefAst {
 #[derive(Debug)]
 pub enum DefKind {
     Vector {
-        // FIXME: size is optional and const also
-        size: Option<Const>,
+        size: VectorSize,
         list: Vec<ImmVal>,
     },
     Function {
         params: Vec<Name>,
         body: Node<StmtAst>,
     },
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum VectorSize {
+    Undef,
+    Zero,
+    Def(Const),
 }
 
 #[derive(Debug)]
@@ -105,8 +73,8 @@ pub enum ExprAst {
     Group(Node<ExprAst>),
     Assign {
         op: Option<BinOp>,
-        lvalue: Node<ExprAst>,
-        rvalue: Node<ExprAst>,
+        lhs: Node<ExprAst>,
+        rhs: Node<ExprAst>,
     },
     Unary {
         op: UnOp,
@@ -114,8 +82,8 @@ pub enum ExprAst {
     },
     Binary {
         op: BinOp,
-        left: Node<ExprAst>,
-        right: Node<ExprAst>,
+        lhs: Node<ExprAst>,
+        rhs: Node<ExprAst>,
     },
     Offset {
         base: Node<ExprAst>,
@@ -138,7 +106,7 @@ pub struct AutoDecl {
     pub value: Option<Const>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum UnOp {
     Neg,     // -a
     Not,     // !a
@@ -164,14 +132,17 @@ pub struct Const {
 
 #[derive(Clone, Copy, Debug)]
 pub enum ConstKind {
-    Number([u8; MAX_NUMBER_LEN]),
-    Char([u8; MAX_CHAR_LEN]),
+    Number(InternedStr),
+    Char(Char),
     String(InternedStr),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Char(pub [u8; MAX_CHAR_LEN]);
+
 #[derive(Clone, Copy, Debug)]
 pub struct Name {
-    pub lexeme: [u8; MAX_NAME_LEN],
+    pub value: InternedStr,
     pub span: Span,
 }
 
@@ -179,10 +150,28 @@ impl Const {
     pub fn new(kind: ConstKind, span: Span) -> Self {
         Self { kind, span }
     }
+
+    pub fn as_str(&self) -> &BStr {
+        match &self.kind {
+            ConstKind::Number(s) | ConstKind::String(s) => s.display(),
+            ConstKind::Char(s) => s.display(),
+        }
+    }
+}
+
+impl Char {
+    pub fn display(&self) -> &BStr {
+        let end = 1 + (self.0[1] != 0) as usize;
+        BStr::new(&self.0[..end])
+    }
 }
 
 impl Name {
-    pub fn new(lexeme: [u8; MAX_NAME_LEN], span: Span) -> Self {
-        Self { lexeme, span }
+    pub fn new(value: InternedStr, span: Span) -> Self {
+        Self { value, span }
+    }
+
+    pub fn as_str(&self) -> &BStr {
+        self.value.display()
     }
 }

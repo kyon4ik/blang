@@ -9,21 +9,17 @@ use super::interner::InternedStr;
 pub const MAX_NAME_LEN: usize = 8;
 pub const MAX_CHAR_LEN: usize = 2;
 
-// Not defined in reference, assume max word has 64 bits
-// FIXME: octal form may have more digits
-pub const MAX_NUMBER_LEN: usize = u64::MAX.ilog10() as usize;
-
 // TODO: use trie
-const KEYWORDS: [([u8; MAX_NAME_LEN], Kw); 9] = [
-    (*b"auto\0\0\0\0", Kw::Auto),
-    (*b"extrn\0\0\0", Kw::Extrn),
-    (*b"case\0\0\0\0", Kw::Case),
-    (*b"if\0\0\0\0\0\0", Kw::If),
-    (*b"else\0\0\0\0", Kw::Else),
-    (*b"while\0\0\0", Kw::While),
-    (*b"switch\0\0", Kw::Switch),
-    (*b"goto\0\0\0\0", Kw::Goto),
-    (*b"return\0\0", Kw::Return),
+const KEYWORDS: [(&[u8], Kw); 9] = [
+    (b"auto", Kw::Auto),
+    (b"extrn", Kw::Extrn),
+    (b"case", Kw::Case),
+    (b"if", Kw::If),
+    (b"else", Kw::Else),
+    (b"while", Kw::While),
+    (b"switch", Kw::Switch),
+    (b"goto", Kw::Goto),
+    (b"return", Kw::Return),
 ];
 
 #[derive(Clone, Copy, Debug)]
@@ -34,8 +30,8 @@ pub struct Token {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TokenKind {
-    Name([u8; MAX_NAME_LEN]),
-    Number([u8; MAX_NUMBER_LEN]),
+    Name(InternedStr),
+    Number(InternedStr),
     Char([u8; MAX_CHAR_LEN]),
     String(InternedStr),
     Keyword(Kw),
@@ -168,15 +164,19 @@ impl Token {
 }
 
 impl TokenKind {
-    pub fn name_or_keyword(symbols: [u8; MAX_NAME_LEN]) -> Self {
+    pub fn name_or_keyword(symbols: &[u8]) -> Self {
         if let Some(kw) = KEYWORDS
             .iter()
             .find_map(|(word, kw)| word.eq(&symbols).then_some(kw))
         {
             Self::Keyword(*kw)
         } else {
-            Self::Name(symbols)
+            Self::Name(InternedStr::new(symbols))
         }
+    }
+
+    pub fn number(symbols: &[u8]) -> Self {
+        Self::Number(InternedStr::new(symbols))
     }
 
     pub fn string(str: &BStr) -> Self {
@@ -187,8 +187,8 @@ impl TokenKind {
 impl fmt::Display for TokenKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Name(name) => write!(f, "Name({})", BStr::new(name)),
-            Self::Number(number) => write!(f, "Number({})", BStr::new(number)),
+            Self::Name(name) => write!(f, "Name({:x} {})", name.index(), name.display()),
+            Self::Number(number) => write!(f, "Number({:x} {})", number.index(), number.display()),
             Self::Char(char) => write!(f, "Char({})", BStr::new(char)),
             Self::String(string) => {
                 write!(f, "String({:x} \"{}\")", string.index(), string.display())

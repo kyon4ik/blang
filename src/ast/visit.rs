@@ -1,11 +1,17 @@
-use std::ffi::CStr;
+use bstr::{BString, ByteVec};
 
-use bstr::{BStr, BString, ByteVec};
-
-use crate::ast::DefKind;
+use crate::ast::{DefKind, VectorSize};
 use crate::lexer::BinOp;
 
-use super::{AutoDecl, Const, ConstKind, DefAst, ExprAst, Name, Node, StmtAst, UnOp};
+use super::{AutoDecl, Const, ConstKind, DefAst, ExprAst, ImmVal, Name, Node, StmtAst, UnOp};
+
+pub trait FunctionVisitor {
+    fn visit_function(&mut self, name: &Name, params: &[Name], body: &StmtAst);
+}
+
+pub trait VectorVisitor {
+    fn visit_vector(&mut self, name: &Name, values: &[ImmVal]);
+}
 
 pub trait StmtVisitor {
     fn visit_auto(&mut self, decls: &[AutoDecl]);
@@ -62,9 +68,9 @@ pub trait ExprVisitor {
             ExprAst::Name(name) => self.visit_name(name),
             ExprAst::Const(cnst) => self.visit_const(cnst),
             ExprAst::Group(node) => self.visit_group(node),
-            ExprAst::Assign { op, lvalue, rvalue } => self.visit_assign(*op, lvalue, rvalue),
+            ExprAst::Assign { op, lhs, rhs } => self.visit_assign(*op, lhs, rhs),
             ExprAst::Unary { op, expr } => self.visit_unary(*op, expr),
-            ExprAst::Binary { op, left, right } => self.visit_binary(*op, left, right),
+            ExprAst::Binary { op, lhs, rhs } => self.visit_binary(*op, lhs, rhs),
             ExprAst::Offset { base, offset } => self.visit_offset(base, offset),
             ExprAst::Ternary {
                 cond,
@@ -83,19 +89,15 @@ pub struct PrettyPrinter {
 impl StmtVisitor for PrettyPrinter {
     fn visit_auto(&mut self, decls: &[AutoDecl]) {
         for decl in decls {
-            self.output.push_str(format!(
-                "auto {} = {:?}",
-                BStr::new(decstr(&decl.name.lexeme)),
-                decl.value
-            ));
+            self.output
+                .push_str(format!("auto {} = {:?}", decl.name.as_str(), decl.value));
             self.output.push(b'\n');
         }
     }
 
     fn visit_extrn(&mut self, names: &[Name]) {
         for name in names {
-            self.output
-                .push_str(format!("extrn {}", BStr::new(decstr(&name.lexeme)),));
+            self.output.push_str(format!("extrn {}", name.as_str()));
             self.output.push(b'\n');
         }
     }
@@ -177,23 +179,29 @@ impl PrettyPrinter {
 
     pub fn print(&mut self, def: &DefAst) {
         self.output.clear();
-        self.output.push_str(decstr(&def.name.lexeme));
+        self.output.push_str(def.name.as_str());
         match &def.kind {
             DefKind::Vector { size, .. } => {
-                self.output.push_str(" <vector[");
-                if let Some(c) = size {
-                    let mut sprinter = SExprVisitor::new();
-                    sprinter.visit_const(c);
-                    self.output.push_str(sprinter.into_inner());
-                } else {
-                    self.output.push(b'0');
+                self.output.push_str(" <vector");
+                match size {
+                    VectorSize::Undef => {}
+                    VectorSize::Zero => {
+                        self.output.push_str("[]");
+                    }
+                    VectorSize::Def(c) => {
+                        let mut sprinter = SExprVisitor::new();
+                        sprinter.visit_const(c);
+                        self.output.push(b'[');
+                        self.output.push_str(sprinter.into_inner());
+                        self.output.push(b']');
+                    }
                 }
-                self.output.push_str("]>");
+                self.output.push_str(">");
             }
             DefKind::Function { params, body } => {
                 self.output.push_str(format!(" <func({})>\n", params.len()));
                 for param in params {
-                    self.output.push_str(decstr(&param.lexeme));
+                    self.output.push_str(param.as_str());
                     self.output.push(b' ');
                 }
                 if !params.is_empty() {
@@ -240,23 +248,17 @@ impl Default for SExprVisitor {
     }
 }
 
-fn decstr(s: &[u8]) -> &[u8] {
-    CStr::from_bytes_until_nul(s)
-        .map(|s| s.to_bytes())
-        .unwrap_or(s)
-}
-
 impl ExprVisitor for SExprVisitor {
     fn visit_name(&mut self, name: &Name) {
-        self.output.push_str(decstr(&name.lexeme));
+        self.output.push_str(name.as_str());
     }
 
     fn visit_const(&mut self, cnst: &Const) {
         match cnst.kind {
-            ConstKind::Number(num) => self.output.push_str(decstr(&num)),
+            ConstKind::Number(num) => self.output.push_str(num.display()),
             ConstKind::Char(char) => {
                 self.output.push(b'\'');
-                self.output.push_str(decstr(&char));
+                self.output.push_str(char.display());
                 self.output.push(b'\'');
             }
             ConstKind::String(str) => {
