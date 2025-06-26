@@ -2,11 +2,14 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::ast::{
-    AutoDecl, Const, ConstKind, DefAst, DefKind, ExprAst, ImmVal, Name, Node, StmtAst,
+    AutoDecl, Const, ConstKind, DefAst, DefKind, ExprAst, ImmVal, Name, Node, StmtAst, UnOp,
 };
 use crate::diagnostics::{DiagErrorKind, Diagnostics, Span};
 use crate::lexer::token::Kw;
-use crate::lexer::{Lexer, Token, TokenKind};
+use crate::lexer::{BinOp, Lexer, Token, TokenKind};
+
+#[cfg(test)]
+mod test;
 
 #[derive(Debug)]
 pub struct Parser<'s> {
@@ -16,25 +19,30 @@ pub struct Parser<'s> {
 }
 
 impl<'s> Parser<'s> {
-    pub fn new(lexer: Lexer<'s>, diag: Rc<RefCell<Diagnostics>>) -> Self {
+    pub fn new(mut lexer: Lexer<'s>, diag: Rc<RefCell<Diagnostics>>) -> Self {
+        let next_tok = [lexer.next_token(), lexer.next_token()];
         Self {
             lexer,
             diag,
-            next_tok: [Token::eof(); 2],
+            next_tok,
         }
     }
 
     pub fn parse_program(&mut self) -> Vec<DefAst> {
         let mut defs = Vec::new();
 
-        self.init();
         loop {
+            if self.peek_token().kind == TokenKind::Eof {
+                break;
+            }
+
             if let Some(name) = self.parse_name("definition") {
                 let def = if self.peek_token().kind == TokenKind::OParen {
                     self.parse_def_function(name)
                 } else {
                     self.parse_def_vector(name)
                 };
+
                 if let Some(def) = def {
                     defs.push(def);
                 }
@@ -43,6 +51,8 @@ impl<'s> Parser<'s> {
                 self.next_token();
             }
         }
+
+        defs
     }
 
     pub fn parse_def_function(&mut self, name: Name) -> Option<DefAst> {
@@ -243,17 +253,160 @@ impl<'s> Parser<'s> {
     }
 
     pub fn parse_expr(&mut self) -> Option<Node<ExprAst>> {
-        todo!()
+        self.parse_expr_assign()
+    }
+
+    pub fn parse_expr_assign(&mut self) -> Option<Node<ExprAst>> {
+        let lhs = self.parse_expr_binary(0)?;
+
+        let op_token = self.peek_token();
+        let op = match op_token.kind {
+            TokenKind::Assign(bin_op) => Some(bin_op),
+            TokenKind::Eq => None,
+            TokenKind::CBrack | TokenKind::CParen | TokenKind::Comma | TokenKind::Semi => {
+                return Some(lhs);
+            }
+            kind => {
+                self.error(
+                    DiagErrorKind::unexpected("token", "operator or ;", format!("{kind}")),
+                    op_token.span,
+                );
+                return None;
+            }
+        };
+
+        // eat `op`
+        self.next_token();
+
+        let rhs = self.parse_expr_assign()?;
+        Some(Node::expr(ExprAst::Assign {
+            op,
+            lvalue: lhs,
+            rvalue: rhs,
+        }))
+    }
+
+    #[inline]
+    fn parse_expr_binary(&mut self, min_bp: u8) -> Option<Node<ExprAst>> {
+        let mut lhs = self.parse_expr_primary()?;
+
+        loop {
+            let op_token = self.peek_token();
+
+            // FIXME: Hack for ternary
+            if op_token.kind != TokenKind::QMark {
+                let op = match op_token.kind {
+                    TokenKind::Plus => BinOp::Add,
+                    TokenKind::Star => BinOp::Mul,
+                    TokenKind::Minus => BinOp::Sub,
+                    TokenKind::Slash => BinOp::Div,
+                    TokenKind::Percent => BinOp::Rem,
+                    TokenKind::Amps => BinOp::And,
+                    TokenKind::Pipe => BinOp::Or,
+                    TokenKind::LtLt => BinOp::Shl,
+                    TokenKind::GtGt => BinOp::Shr,
+                    TokenKind::EqEq => BinOp::Eq,
+                    TokenKind::BangEq => BinOp::Neq,
+                    TokenKind::LtEq => BinOp::LtEq,
+                    TokenKind::GtEq => BinOp::GtEq,
+                    TokenKind::Lt => BinOp::Lt,
+                    TokenKind::Gt => BinOp::Gt,
+                    TokenKind::Assign(_)
+                    | TokenKind::Eq
+                    | TokenKind::CBrack
+                    | TokenKind::CParen
+                    | TokenKind::Colon
+                    | TokenKind::Comma
+                    | TokenKind::Semi => break,
+                    kind => {
+                        self.error(
+                            DiagErrorKind::unexpected("token", "operator or ;", format!("{kind}")),
+                            op_token.span,
+                        );
+                        return None;
+                    }
+                };
+                let (lbp, rbp) = op.binding_power();
+                if lbp < min_bp {
+                    break;
+                }
+
+                // eat `op`
+                self.next_token();
+
+                let rhs = self.parse_expr_binary(rbp)?;
+                lhs = ExprAst::Binary {
+                    op,
+                    left: Node::expr(lhs),
+                    right: rhs,
+                };
+            } else {
+                let (lbp, rbp) = (3, 2);
+                if lbp < min_bp {
+                    break;
+                }
+
+                // eat '?'
+                self.next_token();
+
+                let then_expr = self.parse_expr_binary(0)?;
+                self.expect(TokenKind::Colon)?;
+                let else_expr = self.parse_expr_binary(rbp)?;
+                lhs = ExprAst::Ternary {
+                    cond: Node::expr(lhs),
+                    then_expr,
+                    else_expr,
+                }
+            };
+        }
+
+        Some(Node::expr(lhs))
     }
 
     pub fn parse_expr_group(&mut self) -> Option<ExprAst> {
-        todo!()
+        // eat '('
+        self.next_token();
+        let expr = self.parse_expr()?;
+        self.expect(TokenKind::CParen)?;
+        Some(ExprAst::Group(expr))
+    }
+
+    pub fn parse_expr_unary(&mut self) -> Option<ExprAst> {
+        let Token { kind, span } = self.peek_token();
+        let op = match kind {
+            TokenKind::Minus => UnOp::Neg,
+            TokenKind::MinusMinus => UnOp::Dec,
+            TokenKind::PlusPlus => UnOp::Inc,
+            TokenKind::Bang => UnOp::Not,
+            TokenKind::Star => UnOp::Deref,
+            TokenKind::Amps => UnOp::Ref,
+            _ => {
+                self.error(
+                    DiagErrorKind::unexpected("token", "primary expression", format!("{kind}")),
+                    span,
+                );
+                return None;
+            }
+        };
+
+        // eat `op`
+        self.next_token();
+
+        let expr = self.parse_expr_primary()?;
+
+        Some(ExprAst::Unary {
+            op,
+            expr: Node::expr(expr),
+        })
     }
 
     pub fn parse_expr_primary(&mut self) -> Option<ExprAst> {
         let Token { kind, span } = self.peek_token();
-        let expr = match kind {
-            TokenKind::Name(name) => self.parse_expr_name(Name::new(name, span))?,
+        let mut expr = match kind {
+            TokenKind::Name(name) => {
+                self.next_token();
+                ExprAst::Name(Name::new(name, span))
+            }
             TokenKind::Number(num) => {
                 self.next_token();
                 ExprAst::Const(Const::new(ConstKind::Number(num), span))
@@ -267,36 +420,48 @@ impl<'s> Parser<'s> {
                 ExprAst::Const(Const::new(ConstKind::String(str), span))
             }
             TokenKind::OParen => self.parse_expr_group()?,
-            _ => {
-                self.error(
-                    DiagErrorKind::unexpected("token", "primary expression", format!("{kind}")),
-                    span,
-                );
-                return None;
+            _ => self.parse_expr_unary()?,
+        };
+
+        loop {
+            let op_token = self.peek_token();
+            match op_token.kind {
+                TokenKind::OParen => {
+                    // eat '('
+                    self.next_token();
+                    let args = self.parse_any_comma(|p| p.parse_expr(), TokenKind::CParen)?;
+                    expr = ExprAst::Call {
+                        callee: Node::expr(expr),
+                        args,
+                    };
+                }
+                TokenKind::OBrack => {
+                    // eat '['
+                    self.next_token();
+                    let offset = self.parse_expr()?;
+                    self.expect(TokenKind::CBrack)?;
+                    expr = ExprAst::Offset {
+                        base: Node::expr(expr),
+                        offset,
+                    };
+                }
+                TokenKind::PlusPlus => {
+                    self.next_token();
+                    expr = ExprAst::Unary {
+                        op: UnOp::PostInc,
+                        expr: Node::expr(expr),
+                    };
+                }
+                TokenKind::MinusMinus => {
+                    self.next_token();
+                    expr = ExprAst::Unary {
+                        op: UnOp::PostDec,
+                        expr: Node::expr(expr),
+                    };
+                }
+                _ => return Some(expr),
             }
-        };
-        Some(expr)
-    }
-
-    fn parse_expr_name(&mut self, name: Name) -> Option<ExprAst> {
-        // eat name
-        self.next_token();
-
-        let expr = match self.peek_token().kind {
-            TokenKind::OParen => self.parse_expr_call(name)?,
-            TokenKind::OBrack => self.parse_expr_offset(name)?,
-            _ => ExprAst::Name(name),
-        };
-
-        Some(expr)
-    }
-
-    fn parse_expr_call(&mut self, name: Name) -> Option<ExprAst> {
-        todo!()
-    }
-
-    fn parse_expr_offset(&mut self, name: Name) -> Option<ExprAst> {
-        todo!()
+        }
     }
 
     fn parse_one_or_more_comma<T>(
@@ -492,10 +657,5 @@ impl<'s> Parser<'s> {
         self.next_tok[0] = self.next_tok[1];
         self.next_tok[1] = self.lexer.next_token();
         token
-    }
-
-    fn init(&mut self) {
-        self.next_token();
-        self.next_token();
     }
 }

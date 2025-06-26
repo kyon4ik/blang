@@ -7,6 +7,8 @@ use crate::lexer::BinOp;
 use crate::lexer::interner::InternedStr;
 use crate::lexer::token::{MAX_CHAR_LEN, MAX_NAME_LEN, MAX_NUMBER_LEN};
 
+pub mod visit;
+
 static STMT_NODE_ARENA: LazyLock<Arena<StmtAst>> = LazyLock::new(Arena::new);
 static EXPR_NODE_ARENA: LazyLock<Arena<ExprAst>> = LazyLock::new(Arena::new);
 
@@ -54,6 +56,7 @@ pub struct DefAst {
 #[derive(Debug)]
 pub enum DefKind {
     Vector {
+        // FIXME: size is optional and const also
         size: Option<Const>,
         list: Vec<ImmVal>,
     },

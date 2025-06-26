@@ -1,11 +1,10 @@
 use std::fmt;
-use std::sync::LazyLock;
 
 use bstr::BStr;
 
 use crate::diagnostics::Span;
 
-use super::interner::{InternedStr, StringInterner};
+use super::interner::InternedStr;
 
 pub const MAX_NAME_LEN: usize = 8;
 pub const MAX_CHAR_LEN: usize = 2;
@@ -13,11 +12,6 @@ pub const MAX_CHAR_LEN: usize = 2;
 // Not defined in reference, assume max word has 64 bits
 // FIXME: octal form may have more digits
 pub const MAX_NUMBER_LEN: usize = u64::MAX.ilog10() as usize;
-
-const INTERNER_ARENA_SIZE: usize = 1024 * 1024; // 1MB
-
-static INTERNER: LazyLock<StringInterner> =
-    LazyLock::new(|| StringInterner::new(INTERNER_ARENA_SIZE));
 
 // TODO: use trie
 const KEYWORDS: [([u8; MAX_NAME_LEN], Kw); 9] = [
@@ -141,6 +135,28 @@ pub enum BinOp {
     Div,  // /
 }
 
+impl BinOp {
+    pub fn binding_power(&self) -> (u8, u8) {
+        match self {
+            BinOp::Or => (10, 11),
+            BinOp::And => (12, 13),
+            BinOp::Eq => (14, 15),
+            BinOp::Neq => (14, 15),
+            BinOp::Lt => (16, 17),
+            BinOp::LtEq => (16, 17),
+            BinOp::Gt => (16, 17),
+            BinOp::GtEq => (16, 17),
+            BinOp::Shl => (18, 19),
+            BinOp::Shr => (18, 19),
+            BinOp::Add => (20, 21),
+            BinOp::Sub => (20, 21),
+            BinOp::Rem => (22, 23),
+            BinOp::Mul => (22, 23),
+            BinOp::Div => (22, 23),
+        }
+    }
+}
+
 impl Token {
     pub fn new(kind: TokenKind, span: Span) -> Self {
         Self { kind, span }
@@ -164,7 +180,7 @@ impl TokenKind {
     }
 
     pub fn string(str: &BStr) -> Self {
-        Self::String(INTERNER.intern(str))
+        Self::String(InternedStr::new(str))
     }
 }
 
@@ -174,12 +190,9 @@ impl fmt::Display for TokenKind {
             Self::Name(name) => write!(f, "Name({})", BStr::new(name)),
             Self::Number(number) => write!(f, "Number({})", BStr::new(number)),
             Self::Char(char) => write!(f, "Char({})", BStr::new(char)),
-            Self::String(string) => write!(
-                f,
-                "String({:x} \"{}\")",
-                string.index(),
-                BStr::new(INTERNER.get_string(*string))
-            ),
+            Self::String(string) => {
+                write!(f, "String({:x} \"{}\")", string.index(), string.display())
+            }
             other => write!(f, "{:?}", other),
         }
     }

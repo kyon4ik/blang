@@ -61,13 +61,25 @@ impl<'s> Lexer<'s> {
                 b'|' => Pipe,
                 b'&' => Amps,
                 b'<' => match self.peek() {
-                    b'=' => LtEq,
-                    b'<' => LtLt,
+                    b'=' => {
+                        self.next();
+                        LtEq
+                    }
+                    b'<' => {
+                        self.next();
+                        LtLt
+                    }
                     _ => Lt,
                 },
                 b'>' => match self.peek() {
-                    b'=' => GtEq,
-                    b'>' => GtGt,
+                    b'=' => {
+                        self.next();
+                        GtEq
+                    }
+                    b'>' => {
+                        self.next();
+                        GtGt
+                    }
                     _ => Gt,
                 },
                 b'-' => self.next_if(b'-', MinusMinus, Minus),
@@ -108,7 +120,10 @@ impl<'s> Lexer<'s> {
             (b'>', _) => (BinOp::Gt, 1),
             (b'&', _) => (BinOp::And, 1),
             (b'|', _) => (BinOp::Or, 1),
-            (b'=', _) => return TokenKind::EqEq,
+            (b'=', _) => {
+                self.next();
+                return TokenKind::EqEq;
+            }
             (_, _) => return TokenKind::Eq,
         };
 

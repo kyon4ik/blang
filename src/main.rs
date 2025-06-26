@@ -4,6 +4,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use blang::ast::visit::PrettyPrinter;
 use blang::diagnostics::{Diagnostics, SourceMap};
 use blang::lexer::{Lexer, Token, TokenKind};
 use blang::parser::Parser;
@@ -43,8 +44,9 @@ fn main() {
         let tokens = read_tokens(&src, diag.clone());
         print_tokens(src, &tokens, &args.input);
     } else {
-        for def in defs {
-            println!("{:?}", def);
+        let mut pp = PrettyPrinter::new();
+        for def in &defs {
+            pp.print(def);
         }
     }
 }
