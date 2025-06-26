@@ -4,6 +4,7 @@ use std::rc::Rc;
 
 use bstr::{BStr, ByteSlice};
 
+#[derive(Debug)]
 pub struct Diagnostics {
     src: Rc<[u8]>,
     errors: Vec<DiagError>,

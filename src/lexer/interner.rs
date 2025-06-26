@@ -13,6 +13,7 @@ pub struct StringInterner {
     arena: Arena<u8>,
 }
 
+// FIXME: This maybe unsafe (as internered is not bounded to concrete interner or its lifetime)
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct InternedStr(usize, usize);
 
@@ -41,7 +42,6 @@ impl StringInterner {
     }
 
     pub fn get_string(&self, id: InternedStr) -> &BStr {
-        // SAFETY: this is safe because `intern` creates valid pointer and size
         BStr::new(unsafe { slice::from_raw_parts(id.0 as *const u8, id.1) })
     }
 }

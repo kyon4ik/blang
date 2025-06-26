@@ -2,8 +2,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use bstr::BStr;
+pub use token::{BinOp, Token, TokenKind};
 use token::{MAX_NAME_LEN, MAX_NUMBER_LEN};
-pub use token::{Token, TokenKind};
 
 use crate::diagnostics::{DiagErrorKind, Diagnostics, Span};
 
@@ -12,6 +12,7 @@ pub mod token;
 
 const EOF_CHAR: u8 = b'\0';
 
+#[derive(Debug)]
 pub struct Lexer<'s> {
     src: &'s BStr,
     pos: usize,
@@ -25,10 +26,6 @@ impl<'s> Lexer<'s> {
             pos: 0,
             diag,
         }
-    }
-
-    fn error(&self, kind: DiagErrorKind, span: Span) {
-        self.diag.borrow_mut().error(kind, span)
     }
 
     pub fn next_token(&mut self) -> Token {
@@ -46,6 +43,7 @@ impl<'s> Lexer<'s> {
                 c if c.is_ascii_digit() => self.read_number(c, start),
                 b'\'' => self.read_char(),
                 b'\"' => self.read_string(start),
+                b'=' => self.read_assign_or_eq(),
                 b'(' => OParen,
                 b')' => CParen,
 
@@ -62,7 +60,6 @@ impl<'s> Lexer<'s> {
                 b'!' => self.next_if(b'=', BangEq, Bang),
                 b'|' => Pipe,
                 b'&' => Amps,
-                b'=' => self.next_if(b'=', EqEq, Eq),
                 b'<' => match self.peek() {
                     b'=' => LtEq,
                     b'<' => LtLt,
@@ -92,6 +89,36 @@ impl<'s> Lexer<'s> {
         };
 
         Token::new(kind, Span::new(start, self.pos))
+    }
+
+    fn read_assign_or_eq(&mut self) -> TokenKind {
+        let (binop, count) = match (self.peek(), self.peek2()) {
+            (b'=', b'=') => (BinOp::Eq, 2),
+            (b'!', b'=') => (BinOp::Neq, 2),
+            (b'<', b'=') => (BinOp::LtEq, 2),
+            (b'>', b'=') => (BinOp::GtEq, 2),
+            (b'<', b'<') => (BinOp::Shl, 2),
+            (b'>', b'>') => (BinOp::Shr, 2),
+            (b'+', _) => (BinOp::Add, 1),
+            (b'-', _) => (BinOp::Sub, 1),
+            (b'*', _) => (BinOp::Mul, 1),
+            (b'/', _) => (BinOp::Div, 1),
+            (b'%', _) => (BinOp::Rem, 1),
+            (b'<', _) => (BinOp::Lt, 1),
+            (b'>', _) => (BinOp::Gt, 1),
+            (b'&', _) => (BinOp::And, 1),
+            (b'|', _) => (BinOp::Or, 1),
+            (b'=', _) => return TokenKind::EqEq,
+            (_, _) => return TokenKind::Eq,
+        };
+
+        if count > 1 {
+            self.next();
+        }
+        if count > 0 {
+            self.next();
+        }
+        TokenKind::Assign(binop)
     }
 
     fn read_name_or_kw(&mut self, first: u8, start: usize) -> TokenKind {
@@ -183,6 +210,10 @@ impl<'s> Lexer<'s> {
         // skip "
         self.next();
         kind
+    }
+
+    fn error(&self, kind: DiagErrorKind, span: Span) {
+        self.diag.borrow_mut().error(kind, span)
     }
 
     fn next_if(&mut self, expect: u8, success: TokenKind, fail: TokenKind) -> TokenKind {

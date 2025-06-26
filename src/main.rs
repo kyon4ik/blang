@@ -1,18 +1,21 @@
 use std::cell::RefCell;
 use std::fs::File;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use blang::diagnostics::{Diagnostics, SourceMap};
-use blang::lexer::{Lexer, TokenKind};
-use clap::Parser;
+use blang::lexer::{Lexer, Token, TokenKind};
+use blang::parser::Parser;
+use clap::Parser as _;
 
-#[derive(Parser, Debug)]
-#[command(version, about)]
+#[derive(clap::Parser, Debug)]
+#[command(version, about, long_about = None)]
 struct Args {
     input: PathBuf,
-    #[arg(short, long, default_value_t = 5)]
+    #[arg(long)]
+    print_tokens: bool,
+    #[arg(long, default_value_t = 5)]
     max_errors: usize,
 }
 
@@ -24,13 +27,30 @@ fn main() {
     input_file.read_to_end(&mut src).unwrap();
 
     let src: Rc<[u8]> = Rc::from(src);
-    let src_map = SourceMap::new(src.clone(), &args.input);
-    let diagnostics = Rc::new(RefCell::new(Diagnostics::new(
+    let diag = Rc::new(RefCell::new(Diagnostics::new(
         &src,
         &args.input,
         args.max_errors,
     )));
-    let mut lexer = Lexer::new(&src, diagnostics.clone());
+
+    let mut parser = Parser::new(Lexer::new(&src, diag.clone()), diag.clone());
+    let defs = parser.parse_program();
+
+    if diag.borrow().has_errors() {
+        println!("Failed due to following errors:");
+        diag.borrow().print_errors();
+    } else if args.print_tokens {
+        let tokens = read_tokens(&src, diag.clone());
+        print_tokens(src, &tokens, &args.input);
+    } else {
+        for def in defs {
+            println!("{:?}", def);
+        }
+    }
+}
+
+fn read_tokens(src: &[u8], diag: Rc<RefCell<Diagnostics>>) -> Vec<Token> {
+    let mut lexer = Lexer::new(src, diag);
 
     let mut tokens = Vec::new();
     loop {
@@ -41,21 +61,21 @@ fn main() {
         tokens.push(token);
     }
 
-    if diagnostics.borrow().has_errors() {
-        println!("Failed due to following errors:");
-        diagnostics.borrow().print_errors();
-    } else {
-        let mut prev_line = 0;
+    tokens
+}
 
-        for token in tokens {
-            let (start_loc, end_loc) = src_map.locate_span(token.span).unwrap();
-            assert_eq!(start_loc.line, end_loc.line);
-            if prev_line != start_loc.line {
-                println!("{:>3} | {}", start_loc.line, token.kind);
-                prev_line = start_loc.line;
-            } else {
-                println!("     | {}", token.kind);
-            }
+fn print_tokens(src: Rc<[u8]>, tokens: &[Token], path: &Path) {
+    let src_map = SourceMap::new(src, path);
+
+    let mut prev_line = 0;
+    for token in tokens {
+        let (start_loc, end_loc) = src_map.locate_span(token.span).unwrap();
+        assert_eq!(start_loc.line, end_loc.line);
+        if prev_line != start_loc.line {
+            println!("{:>3} | {}", start_loc.line, token.kind);
+            prev_line = start_loc.line;
+        } else {
+            println!("     | {}", token.kind);
         }
     }
 }

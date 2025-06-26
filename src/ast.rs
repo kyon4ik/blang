@@ -3,12 +3,14 @@ use std::sync::LazyLock;
 
 use crate::arena::Arena;
 use crate::diagnostics::Span;
+use crate::lexer::BinOp;
 use crate::lexer::interner::InternedStr;
 use crate::lexer::token::{MAX_CHAR_LEN, MAX_NAME_LEN, MAX_NUMBER_LEN};
 
 static STMT_NODE_ARENA: LazyLock<Arena<StmtAst>> = LazyLock::new(Arena::new);
 static EXPR_NODE_ARENA: LazyLock<Arena<ExprAst>> = LazyLock::new(Arena::new);
 
+#[derive(Debug)]
 pub struct Node<T: 'static> {
     inner: &'static mut T,
 }
@@ -22,7 +24,7 @@ impl Node<ExprAst> {
 }
 
 impl Node<StmtAst> {
-    pub fn expr(ast: StmtAst) -> Self {
+    pub fn stmt(ast: StmtAst) -> Self {
         Self {
             inner: STMT_NODE_ARENA.alloc(ast),
         }
@@ -43,11 +45,13 @@ impl<T> DerefMut for Node<T> {
     }
 }
 
+#[derive(Debug)]
 pub struct DefAst {
     pub name: Name,
     pub kind: DefKind,
 }
 
+#[derive(Debug)]
 pub enum DefKind {
     Vector {
         size: Option<Const>,
@@ -59,6 +63,7 @@ pub enum DefKind {
     },
 }
 
+#[derive(Debug)]
 pub enum StmtAst {
     Block(Vec<Node<StmtAst>>),
     Cond {
@@ -84,23 +89,28 @@ pub enum StmtAst {
     // declarations
     Extrn(Vec<Name>),
     Auto(Vec<AutoDecl>),
-    Label(Name),
+    Label {
+        name: Name,
+        stmt: Node<StmtAst>,
+    },
 }
 
+#[derive(Debug)]
 pub enum ExprAst {
-    ImmVal(ImmVal),
+    Name(Name),
+    Const(Const),
     Group(Node<ExprAst>),
     Assign {
-        op: Option<BinaryOp>,
+        op: Option<BinOp>,
         lvalue: Node<ExprAst>,
         rvalue: Node<ExprAst>,
     },
     Unary {
-        op: UnaryOp,
+        op: UnOp,
         expr: Node<ExprAst>,
     },
     Binary {
-        op: BinaryOp,
+        op: BinOp,
         left: Node<ExprAst>,
         right: Node<ExprAst>,
     },
@@ -126,7 +136,7 @@ pub struct AutoDecl {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum UnaryOp {
+pub enum UnOp {
     Neg,     // -a
     Not,     // !a
     Inc,     // ++a
@@ -135,25 +145,6 @@ pub enum UnaryOp {
     Deref,   // *a
     PostInc, // a++
     PostDec, // a--
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum BinaryOp {
-    Or,   // |
-    And,  // &
-    Eq,   // ==
-    Neq,  // !=
-    Lt,   // <
-    LtEq, // <=
-    Gt,   // >
-    GtEq, // >=
-    Shl,  // <<
-    Shr,  // >>
-    Add,  // +
-    Sub,  // -
-    Rem,  // %
-    Mul,  // *
-    Div,  // /
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -179,4 +170,16 @@ pub enum ConstKind {
 pub struct Name {
     pub lexeme: [u8; MAX_NAME_LEN],
     pub span: Span,
+}
+
+impl Const {
+    pub fn new(kind: ConstKind, span: Span) -> Self {
+        Self { kind, span }
+    }
+}
+
+impl Name {
+    pub fn new(lexeme: [u8; MAX_NAME_LEN], span: Span) -> Self {
+        Self { lexeme, span }
+    }
 }

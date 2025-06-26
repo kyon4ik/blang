@@ -11,6 +11,7 @@ pub const MAX_NAME_LEN: usize = 8;
 pub const MAX_CHAR_LEN: usize = 2;
 
 // Not defined in reference, assume max word has 64 bits
+// FIXME: octal form may have more digits
 pub const MAX_NUMBER_LEN: usize = u64::MAX.ilog10() as usize;
 
 const INTERNER_ARENA_SIZE: usize = 1024 * 1024; // 1MB
@@ -19,7 +20,7 @@ static INTERNER: LazyLock<StringInterner> =
     LazyLock::new(|| StringInterner::new(INTERNER_ARENA_SIZE));
 
 // TODO: use trie
-const KEYWORDS: [([u8; MAX_NAME_LEN], Kw); 8] = [
+const KEYWORDS: [([u8; MAX_NAME_LEN], Kw); 9] = [
     (*b"auto\0\0\0\0", Kw::Auto),
     (*b"extrn\0\0\0", Kw::Extrn),
     (*b"case\0\0\0\0", Kw::Case),
@@ -28,6 +29,7 @@ const KEYWORDS: [([u8; MAX_NAME_LEN], Kw); 8] = [
     (*b"while\0\0\0", Kw::While),
     (*b"switch\0\0", Kw::Switch),
     (*b"goto\0\0\0\0", Kw::Goto),
+    (*b"return\0\0", Kw::Return),
 ];
 
 #[derive(Clone, Copy, Debug)]
@@ -43,6 +45,7 @@ pub enum TokenKind {
     Char([u8; MAX_CHAR_LEN]),
     String(InternedStr),
     Keyword(Kw),
+    Assign(BinOp),
 
     // ( ... )
     OParen,
@@ -116,6 +119,26 @@ pub enum Kw {
     While,
     Switch,
     Goto,
+    Return,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BinOp {
+    Or,   // |
+    And,  // &
+    Eq,   // ==
+    Neq,  // !=
+    Lt,   // <
+    LtEq, // <=
+    Gt,   // >
+    GtEq, // >=
+    Shl,  // <<
+    Shr,  // >>
+    Add,  // +
+    Sub,  // -
+    Rem,  // %
+    Mul,  // *
+    Div,  // /
 }
 
 impl Token {
