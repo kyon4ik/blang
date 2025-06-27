@@ -264,10 +264,11 @@ impl<'s> Parser<'s> {
         let op = match op_token.kind {
             TokenKind::Assign(bin_op) => Some(bin_op),
             TokenKind::Eq => None,
-            TokenKind::CBrack | TokenKind::CParen | TokenKind::Comma | TokenKind::Semi => {
-                return Some(lhs);
-            }
             kind => {
+                if follows_expr(kind) {
+                    return Some(lhs);
+                }
+
                 self.error(
                     DiagErrorKind::unexpected("token", "operator or ;", format!("{kind}")),
                     op_token.span,
@@ -308,14 +309,13 @@ impl<'s> Parser<'s> {
                     TokenKind::GtEq => BinOp::GtEq,
                     TokenKind::Lt => BinOp::Lt,
                     TokenKind::Gt => BinOp::Gt,
-                    TokenKind::Assign(_)
-                    | TokenKind::Eq
-                    | TokenKind::CBrack
-                    | TokenKind::CParen
-                    | TokenKind::Colon
-                    | TokenKind::Comma
-                    | TokenKind::Semi => break,
+                    // assign expr next
+                    TokenKind::Assign(_) | TokenKind::Eq => break,
                     kind => {
+                        if follows_expr(kind) {
+                            break;
+                        }
+
                         self.error(
                             DiagErrorKind::unexpected("token", "operator or ;", format!("{kind}")),
                             op_token.span,
@@ -599,6 +599,47 @@ impl<'s> Parser<'s> {
         })
     }
 
+    fn parse_name(&mut self, ty: &'static str) -> Option<Name> {
+        let token = self.peek_token();
+        if let TokenKind::Name(name) = token.kind {
+            self.next_token();
+            Some(Name::new(name, token.span))
+        } else {
+            self.error(
+                DiagErrorKind::unexpected(ty, "name", format!("{}", token.kind)),
+                token.span,
+            );
+            None
+        }
+    }
+}
+
+#[inline]
+fn follows_expr(kind: TokenKind) -> bool {
+    use TokenKind::*;
+    matches!(
+        kind,
+        Semi | // goto, semi
+        CParen | // if, while, return
+        Comma | // call
+        // statement start (from switch syntax)
+        Keyword(Kw::Auto | Kw::Extrn | Kw::Case | Kw::If | Kw::While | Kw::Switch | Kw::Goto | Kw::Return) |
+        Name(_) |
+        Number(_) |
+        Char(_) |
+        String(_) |
+        OBrace |
+        OParen |
+        Star |
+        PlusPlus |
+        MinusMinus |
+        Minus |
+        Bang |
+        Amps
+    )
+}
+
+impl Parser<'_> {
     fn expect_opt(&mut self, expected: TokenKind) -> bool {
         let kind = self.peek_token().kind;
         if kind == expected {
@@ -618,20 +659,6 @@ impl<'s> Parser<'s> {
             self.error(
                 DiagErrorKind::unexpected("token", format!("{expected}"), format!("{kind}")),
                 span,
-            );
-            None
-        }
-    }
-
-    fn parse_name(&mut self, ty: &'static str) -> Option<Name> {
-        let token = self.peek_token();
-        if let TokenKind::Name(name) = token.kind {
-            self.next_token();
-            Some(Name::new(name, token.span))
-        } else {
-            self.error(
-                DiagErrorKind::unexpected(ty, "name", format!("{}", token.kind)),
-                token.span,
             );
             None
         }
