@@ -44,7 +44,7 @@ impl<'s> Parser<'s> {
                     defs.push(def);
                 }
             } else {
-                self.next();
+                self.synchronize_def();
             }
         }
 
@@ -82,23 +82,23 @@ impl<'s> Parser<'s> {
     pub fn parse_stmt(&mut self) -> Option<Node<StmtAst>> {
         let token = self.peek();
         let stmt = match token.kind {
-            TokenKind::Keyword(Kw::Auto) => self.parse_stmt_auto()?,
-            TokenKind::Keyword(Kw::Extrn) => self.parse_stmt_extrn()?,
-            TokenKind::Keyword(Kw::Case) => self.parse_stmt_case()?,
-            TokenKind::Keyword(Kw::If) => self.parse_stmt_cond()?,
-            TokenKind::Keyword(Kw::While) => self.parse_stmt_while()?,
-            TokenKind::Keyword(Kw::Switch) => self.parse_stmt_switch()?,
-            TokenKind::Keyword(Kw::Goto) => self.parse_stmt_goto()?,
-            TokenKind::Keyword(Kw::Return) => self.parse_stmt_return()?,
-            TokenKind::Name(name) => {
-                if self.peek2().kind == TokenKind::Colon {
-                    self.parse_stmt_label(Name::new(name, token.span))?
-                } else {
-                    self.parse_stmt_semi()?
-                }
+            TokenKind::Keyword(Kw::Auto) => self.parse_stmt_auto(),
+            TokenKind::Keyword(Kw::Extrn) => self.parse_stmt_extrn(),
+            TokenKind::Keyword(Kw::Case) => self.parse_stmt_case(),
+            TokenKind::Keyword(Kw::If) => self.parse_stmt_cond(),
+            TokenKind::Keyword(Kw::While) => self.parse_stmt_while(),
+            TokenKind::Keyword(Kw::Switch) => self.parse_stmt_switch(),
+            TokenKind::Keyword(Kw::Goto) => self.parse_stmt_goto(),
+            TokenKind::Keyword(Kw::Return) => self.parse_stmt_return(),
+            TokenKind::Name(name) if self.peek2().kind == TokenKind::Colon => {
+                self.parse_stmt_label(Name::new(name, token.span))
             }
-            TokenKind::OBrace => self.parse_stmt_block()?,
-            _ => self.parse_stmt_semi()?,
+            TokenKind::OBrace => self.parse_stmt_block(),
+            _ => self.parse_stmt_semi(),
+        };
+        let Some(stmt) = stmt else {
+            self.synchronize_stmt();
+            return None;
         };
 
         Some(Node::stmt(stmt))
@@ -551,6 +551,40 @@ fn follows_expr(kind: TokenKind) -> bool {
 }
 
 impl Parser<'_> {
+    fn synchronize_def(&mut self) {
+        while !self.is_eof() {
+            if matches!(self.peek().kind, TokenKind::Name(_))
+                && matches!(
+                    self.peek2().kind,
+                    TokenKind::OParen
+                        | TokenKind::OBrack
+                        | TokenKind::String(_)
+                        | TokenKind::Char(_)
+                        | TokenKind::Number(_)
+                        | TokenKind::Name(_)
+                )
+            {
+                break;
+            }
+            self.next();
+        }
+    }
+
+    fn synchronize_stmt(&mut self) {
+        while !self.is_eof() {
+            let token = self.peek();
+            if matches!(
+                token.kind,
+                TokenKind::Keyword(
+                    Kw::Auto | Kw::Extrn | Kw::If | Kw::While | Kw::Switch | Kw::Goto | Kw::Return
+                )
+            ) {
+                break;
+            }
+            self.next();
+        }
+    }
+
     /// Checks if next token kind is 'expected'
     /// Does not consume it or report error
     #[inline]
