@@ -1,6 +1,7 @@
 use bstr::{BStr, ByteSlice};
 
-use crate::ast::visit::{ExprVisitor, SExprVisitor};
+use crate::ast::print::PrettyPrinter;
+use crate::ast::visit::ExprVisitor;
 
 use super::*;
 
@@ -35,14 +36,14 @@ fn tokens(src: &[u8]) -> impl Iterator<Item = Token> {
 
 fn test_expr(src: &[u8], dst: &[u8]) {
     let mut parser = parser(src);
-    let mut s = SExprVisitor::new();
+    let mut pp = PrettyPrinter::new();
     assert!(
-        parser.parse_expr().map(|e| s.visit_expr(&e)).is_some(),
+        parser.parse_expr().map(|e| pp.visit_expr(&e)).is_some(),
         "{} -> {:?}",
         BStr::new(src),
         tokens(src).map(|t| t.kind).collect::<Vec<_>>()
     );
-    assert_eq!(s.into_inner(), BStr::new(dst));
+    assert_eq!(pp.display(), BStr::new(dst));
 }
 
 #[test]

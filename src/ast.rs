@@ -7,6 +7,7 @@ use crate::lexer::interner::InternedStr;
 use crate::lexer::token::MAX_CHAR_LEN;
 
 pub mod node;
+pub mod print;
 pub mod visit;
 
 #[derive(Debug)]

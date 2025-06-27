@@ -4,7 +4,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use blang::ast::visit::PrettyPrinter;
+use blang::ast::print::PrettyPrinter;
 use blang::diagnostics::{Diagnostics, SourceMap};
 use blang::lexer::{Lexer, Token, TokenKind};
 use blang::parser::Parser;
@@ -46,8 +46,9 @@ fn main() {
     } else {
         let mut pp = PrettyPrinter::new();
         for def in &defs {
-            pp.print(def);
+            pp.visit_def(def);
         }
+        println!("{}", pp.display());
     }
 }
 
