@@ -494,7 +494,7 @@ mod test {
             let arena: Arena<Dropper> = Arena::new();
             arena.reserve_extend(2);
             let uninitialized = arena.uninitialized_array();
-            assert!((*uninitialized).len() >= 2);
+            assert!((&(*uninitialized)).len() >= 2);
             ptr::write((*uninitialized)[0].as_mut_ptr(), Dropper(false));
             reached_first_init = true;
             panic!("To drop the arena");
@@ -517,7 +517,7 @@ mod test {
             assert!((*arena.uninitialized_array()).as_ptr() != (*uninit).as_ptr());
             arena.alloc(0);
             let uninit = arena.uninitialized_array();
-            assert_eq!((*uninit).len(), 3);
+            assert_eq!((&(*uninit)).len(), 3);
         }
     }
 

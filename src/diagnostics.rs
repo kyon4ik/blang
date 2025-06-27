@@ -73,8 +73,8 @@ impl Diagnostics {
                     ty,
                     expected,
                     found,
-                } => println!("Expected {} {}, found {}", ty, expected, found),
-                Other(msg) => println!("{}", msg),
+                } => println!("Expected {ty} {expected}, found {found}"),
+                Other(msg) => println!("{msg}"),
             }
             println!(
                 "HERE -> {}",

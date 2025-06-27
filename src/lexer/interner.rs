@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ptr::NonNull;
 use std::slice;
 use std::sync::{LazyLock, Mutex};
 
@@ -50,6 +51,10 @@ impl StringInterner {
 impl InternedStr {
     pub fn new(str: &[u8]) -> Self {
         INTERNER.intern(BStr::new(str))
+    }
+
+    pub fn dummy() -> Self {
+        Self(NonNull::<u8>::dangling().addr().get(), 0)
     }
 
     pub fn index(&self) -> usize {

@@ -1,6 +1,7 @@
 use std::fmt;
 
 use bstr::BStr;
+use strum_macros::EnumDiscriminants;
 
 use crate::diagnostics::Span;
 
@@ -28,7 +29,7 @@ pub struct Token {
     pub span: Span,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, EnumDiscriminants)]
 pub enum TokenKind {
     Name(InternedStr),
     Number(InternedStr),
@@ -164,6 +165,10 @@ impl Token {
 }
 
 impl TokenKind {
+    pub fn dummy_name() -> Self {
+        Self::Name(InternedStr::dummy())
+    }
+
     pub fn name_or_keyword(symbols: &[u8]) -> Self {
         if let Some(kw) = KEYWORDS
             .iter()
@@ -182,6 +187,14 @@ impl TokenKind {
     pub fn string(str: &BStr) -> Self {
         Self::String(InternedStr::new(str))
     }
+
+    pub fn matches(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Keyword(a), Self::Keyword(b)) => a.eq(b),
+            (Self::Assign(a), Self::Assign(b)) => a.eq(b),
+            _ => TokenKindDiscriminants::from(self).eq(&TokenKindDiscriminants::from(other)),
+        }
+    }
 }
 
 impl fmt::Display for TokenKind {
@@ -193,7 +206,7 @@ impl fmt::Display for TokenKind {
             Self::String(string) => {
                 write!(f, "String({:x} \"{}\")", string.index(), string.display())
             }
-            other => write!(f, "{:?}", other),
+            other => write!(f, "{other:?}"),
         }
     }
 }
