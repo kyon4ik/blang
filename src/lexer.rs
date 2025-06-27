@@ -2,7 +2,6 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use bstr::BStr;
-use token::MAX_NAME_LEN;
 pub use token::{BinOp, Token, TokenKind};
 
 use crate::diagnostics::{DiagErrorKind, Diagnostics, Span};
@@ -144,12 +143,12 @@ impl<'s> Lexer<'s> {
         }
 
         // FIXME: make a warning (error when --legacy flag)
-        if self.pos - start > MAX_NAME_LEN {
-            self.error(
-                DiagErrorKind::other(format!("Name is longer than {} chars", MAX_NAME_LEN)),
-                Span::new(start, self.pos),
-            );
-        }
+        // if self.pos - start > MAX_NAME_LEN {
+        // self.error(
+        //     DiagErrorKind::other(format!("Name is longer than {} chars", MAX_NAME_LEN)),
+        //     Span::new(start, self.pos),
+        // );
+        // }
 
         TokenKind::name_or_keyword(&self.src[start..self.pos])
     }

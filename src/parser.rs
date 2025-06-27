@@ -620,8 +620,10 @@ fn follows_expr(kind: TokenKind) -> bool {
     matches!(
         kind,
         Semi | // goto, semi
-        CParen | // if, while, return
+        CParen | // if, while, return, group, call, ...
+        CBrack | // offset
         Comma | // call
+        Colon | // ternary
         // statement start (from switch syntax)
         Keyword(Kw::Auto | Kw::Extrn | Kw::Case | Kw::If | Kw::While | Kw::Switch | Kw::Goto | Kw::Return) |
         Name(_) |
