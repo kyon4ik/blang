@@ -23,7 +23,7 @@ B "Testing";
 C "Globals";
 LIST A, B, C;
 test2() {
-    extrn printf;
+    extrn printf, COUNT, LIST;
     auto i; i = 0;
     while (i < COUNT) printf("%s\n", *((&LIST)[i++]) );
 }
@@ -31,7 +31,7 @@ test2() {
 N  5 ;
 V [5];
 test3() {
-    extrn printf;
+    extrn printf, N, V;
     auto i;
     i = 0; while (i < N) V[i] = ++i * 2;
     i = 0; while (i < N) printf("%d => %d\n", i, V[i++]);
@@ -39,6 +39,7 @@ test3() {
 
 EMPTY [];
 main() {
+extrn test1, test2, test3;
     test1();
     test2();
     test3();

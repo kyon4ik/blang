@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -41,6 +42,10 @@ impl Diagnostics {
             errors,
             src_map,
         }
+    }
+
+    pub fn source_map(&self) -> &SourceMap {
+        &self.src_map
     }
 
     pub fn error(&mut self, kind: DiagErrorKind, span: Span) {
@@ -123,6 +128,12 @@ pub struct SourceMap {
 pub struct SymLoc {
     pub line: usize,
     pub column: usize,
+}
+
+impl fmt::Display for SymLoc {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}", self.line, self.column)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

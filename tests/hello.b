@@ -1,3 +1,10 @@
+main() {
+    extrn putchar, hello;
+    hello();
+    hello();
+    hello();
+}
+
 hello() {
     extrn putchar;
     putchar(72);
@@ -12,11 +19,4 @@ hello() {
     putchar('O');
     putchar('O');
     putchar(10);
-}
-
-main() {
-    extrn putchar;
-    hello();
-    hello();
-    hello();
 }

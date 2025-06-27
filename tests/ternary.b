@@ -12,6 +12,7 @@ test(n) {
 	);
 }
 main(argc, argv) {
+	extrn test; 
 	test(0);
 	test(42);
 	test(69);

@@ -44,13 +44,45 @@ pub trait StmtVisitor {
 pub trait ExprVisitor {
     fn visit_name(&mut self, name: &Name);
     fn visit_const(&mut self, cnst: &Const);
-    fn visit_group(&mut self, group: &ExprAst);
-    fn visit_assign(&mut self, op: Option<BinOp>, lhs: &ExprAst, rhs: &ExprAst);
-    fn visit_unary(&mut self, op: UnOp, expr: &ExprAst);
-    fn visit_binary(&mut self, op: BinOp, lhs: &ExprAst, rhs: &ExprAst);
-    fn visit_offset(&mut self, base: &ExprAst, offset: &ExprAst);
-    fn visit_ternary(&mut self, cond: &ExprAst, then_expr: &ExprAst, else_expr: &ExprAst);
-    fn visit_call(&mut self, callee: &ExprAst, args: &[Node<ExprAst>]);
+
+    fn visit_group(&mut self, group: &ExprAst) {
+        self.visit_expr(group);
+    }
+
+    fn visit_assign(&mut self, op: Option<BinOp>, lhs: &ExprAst, rhs: &ExprAst) {
+        let _ = op;
+        self.visit_expr(lhs);
+        self.visit_expr(rhs);
+    }
+
+    fn visit_unary(&mut self, op: UnOp, expr: &ExprAst) {
+        let _ = op;
+        self.visit_expr(expr);
+    }
+
+    fn visit_binary(&mut self, op: BinOp, lhs: &ExprAst, rhs: &ExprAst) {
+        let _ = op;
+        self.visit_expr(lhs);
+        self.visit_expr(rhs);
+    }
+
+    fn visit_offset(&mut self, base: &ExprAst, offset: &ExprAst) {
+        self.visit_expr(base);
+        self.visit_expr(offset);
+    }
+
+    fn visit_ternary(&mut self, cond: &ExprAst, then_expr: &ExprAst, else_expr: &ExprAst) {
+        self.visit_expr(cond);
+        self.visit_expr(then_expr);
+        self.visit_expr(else_expr);
+    }
+
+    fn visit_call(&mut self, callee: &ExprAst, args: &[Node<ExprAst>]) {
+        self.visit_expr(callee);
+        for arg in args {
+            self.visit_expr(arg);
+        }
+    }
 
     fn visit_expr(&mut self, expr: &ExprAst) {
         match expr {

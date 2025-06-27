@@ -39,7 +39,7 @@ unreachable(message) {
 }
 
 test_fallthrough(x) {
-    extrn printf;
+    extrn printf, unreachable;
     switch (x) {
     unreachable("test_fallthrough");
     case 0: printf("0\n");
@@ -51,7 +51,7 @@ test_fallthrough(x) {
 }
 
 main() {
-  extrn printf, assert_equal;
+  extrn printf, assert_equal, test_lookup, unreachable, test_fallthrough;
 
   assert_equal(test_lookup(69,69),    690,  "(69,69)    => 690");
   assert_equal(test_lookup(420,420),  42,   "(420,420)  => 42");

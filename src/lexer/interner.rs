@@ -20,7 +20,7 @@ pub struct StringInterner {
     arena: Arena<u8>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct InternedStr(usize, usize);
 
 impl StringInterner {

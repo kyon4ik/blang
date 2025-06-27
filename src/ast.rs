@@ -8,6 +8,7 @@ use crate::lexer::token::MAX_CHAR_LEN;
 
 pub mod node;
 pub mod print;
+pub mod resolve;
 pub mod visit;
 
 #[derive(Debug)]

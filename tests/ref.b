@@ -14,7 +14,7 @@ read(ref) return (*ref);
 
 y;
 test1() {
-	extrn printf;
+	extrn write, printf, y;
 	auto x;
 
 	write(&x, 69);
@@ -28,7 +28,7 @@ test1() {
 }
 
 test3() {
-	extrn printf, malloc;
+	extrn printf, malloc, read;
 	auto xs;
 
 	xs = malloc(8*2);
@@ -47,6 +47,7 @@ test3() {
 }
 
 main() {
+	extrn test1, test2, test3;
 	test1();
 	test2();
 	test3();
