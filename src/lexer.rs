@@ -2,7 +2,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use bstr::BStr;
-pub use token::{BinOp, Token, TokenKind};
+use token::BinOpKind;
+pub use token::{Token, TokenKind};
 
 use crate::diagnostics::{DiagErrorKind, Diagnostics, Span};
 
@@ -104,21 +105,21 @@ impl<'s> Lexer<'s> {
 
     fn read_assign_or_eq(&mut self) -> TokenKind {
         let (binop, count) = match (self.peek(), self.peek2()) {
-            (b'=', b'=') => (BinOp::Eq, 2),
-            (b'!', b'=') => (BinOp::Neq, 2),
-            (b'<', b'=') => (BinOp::LtEq, 2),
-            (b'>', b'=') => (BinOp::GtEq, 2),
-            (b'<', b'<') => (BinOp::Shl, 2),
-            (b'>', b'>') => (BinOp::Shr, 2),
-            (b'+', _) => (BinOp::Add, 1),
-            (b'-', _) => (BinOp::Sub, 1),
-            (b'*', _) => (BinOp::Mul, 1),
-            (b'/', _) => (BinOp::Div, 1),
-            (b'%', _) => (BinOp::Rem, 1),
-            (b'<', _) => (BinOp::Lt, 1),
-            (b'>', _) => (BinOp::Gt, 1),
-            (b'&', _) => (BinOp::And, 1),
-            (b'|', _) => (BinOp::Or, 1),
+            (b'=', b'=') => (BinOpKind::Eq, 2),
+            (b'!', b'=') => (BinOpKind::Neq, 2),
+            (b'<', b'=') => (BinOpKind::LtEq, 2),
+            (b'>', b'=') => (BinOpKind::GtEq, 2),
+            (b'<', b'<') => (BinOpKind::Shl, 2),
+            (b'>', b'>') => (BinOpKind::Shr, 2),
+            (b'+', _) => (BinOpKind::Add, 1),
+            (b'-', _) => (BinOpKind::Sub, 1),
+            (b'*', _) => (BinOpKind::Mul, 1),
+            (b'/', _) => (BinOpKind::Div, 1),
+            (b'%', _) => (BinOpKind::Rem, 1),
+            (b'<', _) => (BinOpKind::Lt, 1),
+            (b'>', _) => (BinOpKind::Gt, 1),
+            (b'&', _) => (BinOpKind::And, 1),
+            (b'|', _) => (BinOpKind::Or, 1),
             (b'=', _) => {
                 self.next();
                 return TokenKind::EqEq;

@@ -36,7 +36,7 @@ pub enum TokenKind {
     Char([u8; MAX_CHAR_LEN]),
     String(InternedStr),
     Keyword(Kw),
-    Assign(BinOp),
+    Assign(BinOpKind),
 
     // ( ... )
     OParen,
@@ -114,7 +114,7 @@ pub enum Kw {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum BinOp {
+pub enum BinOpKind {
     Or,   // |
     And,  // &
     Eq,   // ==
@@ -132,24 +132,24 @@ pub enum BinOp {
     Div,  // /
 }
 
-impl BinOp {
+impl BinOpKind {
     pub fn binding_power(&self) -> (u8, u8) {
         match self {
-            BinOp::Or => (10, 11),
-            BinOp::And => (12, 13),
-            BinOp::Eq => (14, 15),
-            BinOp::Neq => (14, 15),
-            BinOp::Lt => (16, 17),
-            BinOp::LtEq => (16, 17),
-            BinOp::Gt => (16, 17),
-            BinOp::GtEq => (16, 17),
-            BinOp::Shl => (18, 19),
-            BinOp::Shr => (18, 19),
-            BinOp::Add => (20, 21),
-            BinOp::Sub => (20, 21),
-            BinOp::Rem => (22, 23),
-            BinOp::Mul => (22, 23),
-            BinOp::Div => (22, 23),
+            Self::Or => (10, 11),
+            Self::And => (12, 13),
+            Self::Eq => (14, 15),
+            Self::Neq => (14, 15),
+            Self::Lt => (16, 17),
+            Self::LtEq => (16, 17),
+            Self::Gt => (16, 17),
+            Self::GtEq => (16, 17),
+            Self::Shl => (18, 19),
+            Self::Shr => (18, 19),
+            Self::Add => (20, 21),
+            Self::Sub => (20, 21),
+            Self::Rem => (22, 23),
+            Self::Mul => (22, 23),
+            Self::Div => (22, 23),
         }
     }
 }

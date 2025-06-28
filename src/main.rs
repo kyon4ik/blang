@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use blang::ast::print::PrettyPrinter;
-use blang::ast::resolve::NameResolver;
+use blang::ast::resolve::{NameResolver, ValueChecker};
 use blang::diagnostics::{Diagnostics, SourceMap};
 use blang::lexer::{Lexer, Token, TokenKind};
 use blang::parser::Parser;
@@ -38,22 +38,26 @@ fn main() {
     let mut parser = Parser::new(Lexer::new(&src, diag.clone()), diag.clone());
     let defs = parser.parse_program();
     let mut resolver = NameResolver::new(diag.clone());
+    let mut checker = ValueChecker::new(diag.clone());
     for def in &defs {
         resolver.visit_def(def);
+        checker.visit_def(def);
     }
 
     if diag.borrow().has_errors() {
         println!("Failed due to following errors:");
         diag.borrow().print_errors();
-    } else if args.print_tokens {
-        let tokens = read_tokens(&src, diag.clone());
-        print_tokens(src, &tokens, &args.input);
     } else {
         let mut pp = PrettyPrinter::new();
         for def in &defs {
             pp.visit_def(def);
         }
         println!("{}", pp.display());
+    }
+
+    if args.print_tokens {
+        let tokens = read_tokens(&src, diag.clone());
+        print_tokens(src, &tokens, &args.input);
     }
 }
 

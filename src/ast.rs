@@ -2,9 +2,8 @@ use bstr::BStr;
 pub use node::Node;
 
 use crate::diagnostics::Span;
-use crate::lexer::BinOp;
 use crate::lexer::interner::InternedStr;
-use crate::lexer::token::MAX_CHAR_LEN;
+use crate::lexer::token::{BinOpKind, MAX_CHAR_LEN};
 
 pub mod node;
 pub mod print;
@@ -74,7 +73,7 @@ pub enum ExprAst {
     Const(Const),
     Group(Node<ExprAst>),
     Assign {
-        op: Option<BinOp>,
+        op: AssignOp,
         lhs: Node<ExprAst>,
         rhs: Node<ExprAst>,
     },
@@ -108,8 +107,26 @@ pub struct AutoDecl {
     pub value: Option<Const>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct AssignOp {
+    pub kind: Option<BinOpKind>,
+    pub span: Span,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct BinOp {
+    pub kind: BinOpKind,
+    pub span: Span,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct UnOp {
+    pub kind: UnOpKind,
+    pub span: Span,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum UnOp {
+pub enum UnOpKind {
     Neg,     // -a
     Not,     // !a
     Inc,     // ++a

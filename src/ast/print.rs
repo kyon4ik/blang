@@ -1,10 +1,13 @@
 use bstr::{BStr, BString, ByteVec};
 
 use crate::ast::{DefKind, VectorSize};
-use crate::lexer::BinOp;
+use crate::lexer::token::BinOpKind;
 
 use super::visit::{ExprVisitor, StmtVisitor};
-use super::{AutoDecl, Const, ConstKind, DefAst, ExprAst, Name, Node, StmtAst, UnOp};
+use super::{
+    AssignOp, AutoDecl, BinOp, Const, ConstKind, DefAst, ExprAst, Name, Node, StmtAst, UnOp,
+    UnOpKind,
+};
 
 pub struct PrettyPrinter {
     output: BString,
@@ -145,6 +148,8 @@ impl StmtVisitor for PrettyPrinter {
 }
 
 impl ExprVisitor for PrettyPrinter {
+    type Value = ();
+
     fn visit_name(&mut self, name: &Name) {
         self.output.push_str(name.as_str());
     }
@@ -169,23 +174,23 @@ impl ExprVisitor for PrettyPrinter {
         self.visit_expr(group);
     }
 
-    fn visit_assign(&mut self, op: Option<BinOp>, lhs: &ExprAst, rhs: &ExprAst) {
-        let op_str: &[u8] = match op {
-            Some(BinOp::Or) => b"=|",
-            Some(BinOp::And) => b"=&",
-            Some(BinOp::Eq) => b"===",
-            Some(BinOp::Neq) => b"=!=",
-            Some(BinOp::Lt) => b"=<",
-            Some(BinOp::LtEq) => b"=<=",
-            Some(BinOp::Gt) => b"=>",
-            Some(BinOp::GtEq) => b"=>=",
-            Some(BinOp::Shl) => b"=<<",
-            Some(BinOp::Shr) => b"=>>",
-            Some(BinOp::Add) => b"=+",
-            Some(BinOp::Sub) => b"=-",
-            Some(BinOp::Rem) => b"=%",
-            Some(BinOp::Mul) => b"=*",
-            Some(BinOp::Div) => b"=/",
+    fn visit_assign(&mut self, op: AssignOp, lhs: &ExprAst, rhs: &ExprAst) {
+        let op_str: &[u8] = match op.kind {
+            Some(BinOpKind::Or) => b"=|",
+            Some(BinOpKind::And) => b"=&",
+            Some(BinOpKind::Eq) => b"===",
+            Some(BinOpKind::Neq) => b"=!=",
+            Some(BinOpKind::Lt) => b"=<",
+            Some(BinOpKind::LtEq) => b"=<=",
+            Some(BinOpKind::Gt) => b"=>",
+            Some(BinOpKind::GtEq) => b"=>=",
+            Some(BinOpKind::Shl) => b"=<<",
+            Some(BinOpKind::Shr) => b"=>>",
+            Some(BinOpKind::Add) => b"=+",
+            Some(BinOpKind::Sub) => b"=-",
+            Some(BinOpKind::Rem) => b"=%",
+            Some(BinOpKind::Mul) => b"=*",
+            Some(BinOpKind::Div) => b"=/",
             None => b"=",
         };
         self.output.push(b'(');
@@ -198,15 +203,15 @@ impl ExprVisitor for PrettyPrinter {
     }
 
     fn visit_unary(&mut self, op: UnOp, expr: &ExprAst) {
-        let op_str: &[u8] = match op {
-            UnOp::Neg => b"-",
-            UnOp::Not => b"!",
-            UnOp::Inc => b"++",
-            UnOp::Dec => b"--",
-            UnOp::Ref => b"&",
-            UnOp::Deref => b"*",
-            UnOp::PostInc => b"$++",
-            UnOp::PostDec => b"$--",
+        let op_str: &[u8] = match op.kind {
+            UnOpKind::Neg => b"-",
+            UnOpKind::Not => b"!",
+            UnOpKind::Inc => b"++",
+            UnOpKind::Dec => b"--",
+            UnOpKind::Ref => b"&",
+            UnOpKind::Deref => b"*",
+            UnOpKind::PostInc => b"$++",
+            UnOpKind::PostDec => b"$--",
         };
 
         self.output.push(b'(');
@@ -217,22 +222,22 @@ impl ExprVisitor for PrettyPrinter {
     }
 
     fn visit_binary(&mut self, op: BinOp, lhs: &ExprAst, rhs: &ExprAst) {
-        let op_str: &[u8] = match op {
-            BinOp::Or => b"|",
-            BinOp::And => b"&",
-            BinOp::Eq => b"==",
-            BinOp::Neq => b"!=",
-            BinOp::Lt => b"<",
-            BinOp::LtEq => b"<=",
-            BinOp::Gt => b">",
-            BinOp::GtEq => b">=",
-            BinOp::Shl => b"<<",
-            BinOp::Shr => b">>",
-            BinOp::Add => b"+",
-            BinOp::Sub => b"-",
-            BinOp::Rem => b"%",
-            BinOp::Mul => b"*",
-            BinOp::Div => b"/",
+        let op_str: &[u8] = match op.kind {
+            BinOpKind::Or => b"|",
+            BinOpKind::And => b"&",
+            BinOpKind::Eq => b"==",
+            BinOpKind::Neq => b"!=",
+            BinOpKind::Lt => b"<",
+            BinOpKind::LtEq => b"<=",
+            BinOpKind::Gt => b">",
+            BinOpKind::GtEq => b">=",
+            BinOpKind::Shl => b"<<",
+            BinOpKind::Shr => b">>",
+            BinOpKind::Add => b"+",
+            BinOpKind::Sub => b"-",
+            BinOpKind::Rem => b"%",
+            BinOpKind::Mul => b"*",
+            BinOpKind::Div => b"/",
         };
         self.output.push(b'(');
         self.output.push_str(op_str);

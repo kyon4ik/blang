@@ -1,18 +1,50 @@
-use crate::lexer::BinOp;
+use super::*;
 
-use super::{AutoDecl, Const, ExprAst, Name, Node, StmtAst, UnOp};
-
-pub trait StmtVisitor {
+pub trait StmtVisitor: ExprVisitor {
     fn visit_auto(&mut self, decls: &[AutoDecl]);
     fn visit_extrn(&mut self, names: &[Name]);
-    fn visit_semi(&mut self, expr: Option<&ExprAst>);
-    fn visit_return(&mut self, expr: Option<&ExprAst>);
-    fn visit_label(&mut self, name: &Name, stmt: &StmtAst);
-    fn visit_goto(&mut self, label: &ExprAst);
-    fn visit_case(&mut self, cnst: &Const, stmt: &StmtAst);
-    fn visit_cond(&mut self, cond: &ExprAst, then_stmt: &StmtAst, else_stmt: Option<&StmtAst>);
-    fn visit_while(&mut self, cond: &ExprAst, stmt: &StmtAst);
-    fn visit_switch(&mut self, cond: &ExprAst, stmt: &StmtAst);
+
+    fn visit_semi(&mut self, expr: Option<&ExprAst>) {
+        if let Some(expr) = expr {
+            self.visit_expr(expr);
+        }
+    }
+
+    fn visit_return(&mut self, expr: Option<&ExprAst>) {
+        if let Some(expr) = expr {
+            self.visit_expr(expr);
+        }
+    }
+
+    fn visit_label(&mut self, _name: &Name, stmt: &StmtAst) {
+        self.visit_stmt(stmt);
+    }
+
+    fn visit_goto(&mut self, label: &ExprAst) {
+        self.visit_expr(label);
+    }
+
+    fn visit_case(&mut self, _cnst: &Const, stmt: &StmtAst) {
+        self.visit_stmt(stmt);
+    }
+
+    fn visit_cond(&mut self, cond: &ExprAst, then_stmt: &StmtAst, else_stmt: Option<&StmtAst>) {
+        self.visit_expr(cond);
+        self.visit_stmt(then_stmt);
+        if let Some(else_stmt) = else_stmt {
+            self.visit_stmt(else_stmt);
+        }
+    }
+
+    fn visit_while(&mut self, cond: &ExprAst, stmt: &StmtAst) {
+        self.visit_expr(cond);
+        self.visit_stmt(stmt);
+    }
+
+    fn visit_switch(&mut self, cond: &ExprAst, stmt: &StmtAst) {
+        self.visit_expr(cond);
+        self.visit_stmt(stmt);
+    }
 
     fn visit_block(&mut self, stmts: &[Node<StmtAst>]) {
         for stmt in stmts {
@@ -42,49 +74,24 @@ pub trait StmtVisitor {
 }
 
 pub trait ExprVisitor {
-    fn visit_name(&mut self, name: &Name);
-    fn visit_const(&mut self, cnst: &Const);
+    type Value;
 
-    fn visit_group(&mut self, group: &ExprAst) {
-        self.visit_expr(group);
-    }
+    fn visit_name(&mut self, name: &Name) -> Self::Value;
+    fn visit_const(&mut self, cnst: &Const) -> Self::Value;
+    fn visit_group(&mut self, group: &ExprAst) -> Self::Value;
+    fn visit_assign(&mut self, op: AssignOp, lhs: &ExprAst, rhs: &ExprAst) -> Self::Value;
+    fn visit_unary(&mut self, op: UnOp, expr: &ExprAst) -> Self::Value;
+    fn visit_binary(&mut self, op: BinOp, lhs: &ExprAst, rhs: &ExprAst) -> Self::Value;
+    fn visit_offset(&mut self, base: &ExprAst, offset: &ExprAst) -> Self::Value;
+    fn visit_ternary(
+        &mut self,
+        cond: &ExprAst,
+        then_expr: &ExprAst,
+        else_expr: &ExprAst,
+    ) -> Self::Value;
+    fn visit_call(&mut self, callee: &ExprAst, args: &[Node<ExprAst>]) -> Self::Value;
 
-    fn visit_assign(&mut self, op: Option<BinOp>, lhs: &ExprAst, rhs: &ExprAst) {
-        let _ = op;
-        self.visit_expr(lhs);
-        self.visit_expr(rhs);
-    }
-
-    fn visit_unary(&mut self, op: UnOp, expr: &ExprAst) {
-        let _ = op;
-        self.visit_expr(expr);
-    }
-
-    fn visit_binary(&mut self, op: BinOp, lhs: &ExprAst, rhs: &ExprAst) {
-        let _ = op;
-        self.visit_expr(lhs);
-        self.visit_expr(rhs);
-    }
-
-    fn visit_offset(&mut self, base: &ExprAst, offset: &ExprAst) {
-        self.visit_expr(base);
-        self.visit_expr(offset);
-    }
-
-    fn visit_ternary(&mut self, cond: &ExprAst, then_expr: &ExprAst, else_expr: &ExprAst) {
-        self.visit_expr(cond);
-        self.visit_expr(then_expr);
-        self.visit_expr(else_expr);
-    }
-
-    fn visit_call(&mut self, callee: &ExprAst, args: &[Node<ExprAst>]) {
-        self.visit_expr(callee);
-        for arg in args {
-            self.visit_expr(arg);
-        }
-    }
-
-    fn visit_expr(&mut self, expr: &ExprAst) {
+    fn visit_expr(&mut self, expr: &ExprAst) -> Self::Value {
         match expr {
             ExprAst::Name(name) => self.visit_name(name),
             ExprAst::Const(cnst) => self.visit_const(cnst),

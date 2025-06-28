@@ -2,12 +2,12 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::ast::{
-    AutoDecl, Char, Const, ConstKind, DefAst, DefKind, ExprAst, ImmVal, Name, Node, StmtAst, UnOp,
-    VectorSize,
+    AssignOp, AutoDecl, BinOp, Char, Const, ConstKind, DefAst, DefKind, ExprAst, ImmVal, Name,
+    Node, StmtAst, UnOp, UnOpKind, VectorSize,
 };
 use crate::diagnostics::{DiagErrorKind, Diagnostics, Span};
-use crate::lexer::token::Kw;
-use crate::lexer::{BinOp, Lexer, Token, TokenKind};
+use crate::lexer::token::{BinOpKind, Kw};
+use crate::lexer::{Lexer, Token, TokenKind};
 
 #[cfg(test)]
 mod test;
@@ -224,7 +224,7 @@ impl<'s> Parser<'s> {
 
         // FIXME: you consume_any smh?
         let op_token = self.peek();
-        let op = match op_token.kind {
+        let op_kind = match op_token.kind {
             TokenKind::Assign(bin_op) => Some(bin_op),
             TokenKind::Eq => None,
             kind => {
@@ -243,6 +243,10 @@ impl<'s> Parser<'s> {
         // eat `op`
         self.next();
 
+        let op = AssignOp {
+            kind: op_kind,
+            span: op_token.span,
+        };
         let rhs = self.parse_expr_assign()?;
         Some(Node::expr(ExprAst::Assign { op, lhs, rhs }))
     }
@@ -256,22 +260,22 @@ impl<'s> Parser<'s> {
 
             // FIXME: Hack for ternary
             if op_token.kind != TokenKind::QMark {
-                let op = match op_token.kind {
-                    TokenKind::Plus => BinOp::Add,
-                    TokenKind::Star => BinOp::Mul,
-                    TokenKind::Minus => BinOp::Sub,
-                    TokenKind::Slash => BinOp::Div,
-                    TokenKind::Percent => BinOp::Rem,
-                    TokenKind::Amps => BinOp::And,
-                    TokenKind::Pipe => BinOp::Or,
-                    TokenKind::LtLt => BinOp::Shl,
-                    TokenKind::GtGt => BinOp::Shr,
-                    TokenKind::EqEq => BinOp::Eq,
-                    TokenKind::BangEq => BinOp::Neq,
-                    TokenKind::LtEq => BinOp::LtEq,
-                    TokenKind::GtEq => BinOp::GtEq,
-                    TokenKind::Lt => BinOp::Lt,
-                    TokenKind::Gt => BinOp::Gt,
+                let op_kind = match op_token.kind {
+                    TokenKind::Plus => BinOpKind::Add,
+                    TokenKind::Star => BinOpKind::Mul,
+                    TokenKind::Minus => BinOpKind::Sub,
+                    TokenKind::Slash => BinOpKind::Div,
+                    TokenKind::Percent => BinOpKind::Rem,
+                    TokenKind::Amps => BinOpKind::And,
+                    TokenKind::Pipe => BinOpKind::Or,
+                    TokenKind::LtLt => BinOpKind::Shl,
+                    TokenKind::GtGt => BinOpKind::Shr,
+                    TokenKind::EqEq => BinOpKind::Eq,
+                    TokenKind::BangEq => BinOpKind::Neq,
+                    TokenKind::LtEq => BinOpKind::LtEq,
+                    TokenKind::GtEq => BinOpKind::GtEq,
+                    TokenKind::Lt => BinOpKind::Lt,
+                    TokenKind::Gt => BinOpKind::Gt,
                     // assign expr next
                     TokenKind::Assign(_) | TokenKind::Eq => break,
                     kind => {
@@ -286,7 +290,7 @@ impl<'s> Parser<'s> {
                         return None;
                     }
                 };
-                let (lbp, rbp) = op.binding_power();
+                let (lbp, rbp) = op_kind.binding_power();
                 if lbp < min_bp {
                     break;
                 }
@@ -294,6 +298,10 @@ impl<'s> Parser<'s> {
                 // eat `op`
                 self.next();
 
+                let op = BinOp {
+                    kind: op_kind,
+                    span: op_token.span,
+                };
                 let rhs = self.parse_expr_binary(rbp)?;
                 lhs = ExprAst::Binary {
                     op,
@@ -332,16 +340,20 @@ impl<'s> Parser<'s> {
     pub fn parse_expr_unary(&mut self) -> Option<ExprAst> {
         use TokenKind::*;
         let op_token = self.consume_any(&[Minus, MinusMinus, PlusPlus, Bang, Star, Amps])?;
-        let op = match op_token.kind {
-            TokenKind::Minus => UnOp::Neg,
-            TokenKind::MinusMinus => UnOp::Dec,
-            TokenKind::PlusPlus => UnOp::Inc,
-            TokenKind::Bang => UnOp::Not,
-            TokenKind::Star => UnOp::Deref,
-            TokenKind::Amps => UnOp::Ref,
+        let op_kind = match op_token.kind {
+            TokenKind::Minus => UnOpKind::Neg,
+            TokenKind::MinusMinus => UnOpKind::Dec,
+            TokenKind::PlusPlus => UnOpKind::Inc,
+            TokenKind::Bang => UnOpKind::Not,
+            TokenKind::Star => UnOpKind::Deref,
+            TokenKind::Amps => UnOpKind::Ref,
             _ => unreachable!(),
         };
 
+        let op = UnOp {
+            kind: op_kind,
+            span: op_token.span,
+        };
         let expr = self.parse_expr_primary()?;
         Some(ExprAst::Unary {
             op,
@@ -397,16 +409,22 @@ impl<'s> Parser<'s> {
                     };
                 }
                 TokenKind::PlusPlus => {
-                    self.next();
+                    let op_span = self.next().span;
                     expr = ExprAst::Unary {
-                        op: UnOp::PostInc,
+                        op: UnOp {
+                            kind: UnOpKind::PostInc,
+                            span: op_span,
+                        },
                         expr: Node::expr(expr),
                     };
                 }
                 TokenKind::MinusMinus => {
-                    self.next();
+                    let op_span = self.next().span;
                     expr = ExprAst::Unary {
-                        op: UnOp::PostDec,
+                        op: UnOp {
+                            kind: UnOpKind::PostDec,
+                            span: op_span,
+                        },
                         expr: Node::expr(expr),
                     };
                 }
