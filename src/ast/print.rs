@@ -98,9 +98,9 @@ impl StmtVisitor for PrettyPrinter {
         self.output.push(b'\n');
     }
 
-    fn visit_goto(&mut self, label: &ExprAst) {
+    fn visit_goto(&mut self, label: &Name) {
         self.output.push_str(b"goto ");
-        self.visit_expr(label);
+        self.visit_name(label);
         self.output.push(b'\n');
     }
 

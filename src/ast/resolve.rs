@@ -10,7 +10,9 @@ use super::*;
 
 pub struct NameResolver {
     switch_stack: usize,
+    globals: HashMap<InternedStr, Span>,
     names: HashMap<InternedStr, Span>,
+    used_labels: HashMap<InternedStr, Span>,
     labels: HashMap<InternedStr, Span>,
     diag: Rc<RefCell<Diagnostics>>,
 }
@@ -38,7 +40,9 @@ impl NameResolver {
     pub fn new(diag: Rc<RefCell<Diagnostics>>) -> Self {
         Self {
             switch_stack: 0,
+            globals: HashMap::new(),
             names: HashMap::new(),
+            used_labels: HashMap::new(),
             labels: HashMap::new(),
             diag,
         }
@@ -48,8 +52,15 @@ impl NameResolver {
         self.names.clear();
         self.labels.clear();
         assert_eq!(self.switch_stack, 0);
+        self.declare_global(&def.name);
         match &def.kind {
-            DefKind::Vector { .. } => {}
+            DefKind::Vector { list, .. } => {
+                for ival in list {
+                    if let ImmVal::Name(name) = ival {
+                        self.use_global(name);
+                    }
+                }
+            }
             DefKind::Function { params, body } => {
                 for param in params {
                     self.declare_name(param);
@@ -57,6 +68,42 @@ impl NameResolver {
                 self.visit_stmt(body);
             }
         }
+        for (value, span) in self.used_labels.drain() {
+            self.diag.borrow_mut().error(
+                DiagErrorKind::other(format!("Undefined label '{}'.", value.display())),
+                span,
+            );
+        }
+    }
+
+    fn use_label(&mut self, name: &Name) {
+        // FIXME: maybe used in several places
+        self.used_labels.insert(name.value, name.span);
+    }
+
+    fn use_global(&mut self, name: &Name) {
+        self.globals.entry(name.value).or_insert(Span::empty());
+    }
+
+    fn declare_global(&mut self, name: &Name) {
+        self.globals
+            .entry(name.value)
+            .and_modify(|span| {
+                if *span != Span::empty() {
+                    let loc = self.diag.borrow().source_map().locate(span.start).unwrap();
+                    self.diag.borrow_mut().error(
+                        DiagErrorKind::other(format!(
+                            "Redefinition of global name {}. First defined here {}.",
+                            name.value.display(),
+                            loc
+                        )),
+                        name.span,
+                    )
+                } else {
+                    *span = name.span;
+                }
+            })
+            .or_insert(name.span);
     }
 
     fn declare_name(&mut self, name: &Name) {
@@ -77,6 +124,7 @@ impl NameResolver {
     }
 
     fn declare_label(&mut self, name: &Name) {
+        self.used_labels.remove(&name.value);
         self.labels
             .entry(name.value)
             .and_modify(|span| {
@@ -97,6 +145,8 @@ impl StmtVisitor for ValueChecker {
     fn visit_auto(&mut self, _decls: &[AutoDecl]) {}
 
     fn visit_extrn(&mut self, _names: &[Name]) {}
+
+    fn visit_goto(&mut self, _label: &Name) {}
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -197,8 +247,13 @@ impl StmtVisitor for NameResolver {
 
     fn visit_extrn(&mut self, names: &[Name]) {
         for name in names {
+            self.use_global(name);
             self.declare_name(name);
         }
+    }
+
+    fn visit_goto(&mut self, label: &Name) {
+        self.use_label(label);
     }
 
     fn visit_label(&mut self, name: &Name, stmt: &StmtAst) {

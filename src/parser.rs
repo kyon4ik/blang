@@ -164,9 +164,9 @@ impl<'s> Parser<'s> {
 
     pub fn parse_stmt_goto(&mut self) -> Option<StmtAst> {
         self.eat(TokenKind::Keyword(Kw::Goto));
-        let expr = self.parse_expr()?;
+        let name = self.parse_name()?;
         self.consume(TokenKind::Semi)?;
-        Some(StmtAst::Goto(expr))
+        Some(StmtAst::Goto(name))
     }
 
     pub fn parse_stmt_return(&mut self) -> Option<StmtAst> {

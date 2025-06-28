@@ -55,7 +55,7 @@ pub enum StmtAst {
         cnst: Const,
         stmt: Node<StmtAst>,
     },
-    Goto(Node<ExprAst>),
+    Goto(Name),
     Return(Option<Node<ExprAst>>),
     Semi(Option<Node<ExprAst>>),
     // declarations

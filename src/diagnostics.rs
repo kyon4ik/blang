@@ -136,7 +136,7 @@ impl fmt::Display for SymLoc {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Span {
     pub start: usize,
     pub end: usize,

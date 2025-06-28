@@ -3,6 +3,7 @@ use super::*;
 pub trait StmtVisitor: ExprVisitor {
     fn visit_auto(&mut self, decls: &[AutoDecl]);
     fn visit_extrn(&mut self, names: &[Name]);
+    fn visit_goto(&mut self, label: &Name);
 
     fn visit_semi(&mut self, expr: Option<&ExprAst>) {
         if let Some(expr) = expr {
@@ -18,10 +19,6 @@ pub trait StmtVisitor: ExprVisitor {
 
     fn visit_label(&mut self, _name: &Name, stmt: &StmtAst) {
         self.visit_stmt(stmt);
-    }
-
-    fn visit_goto(&mut self, label: &ExprAst) {
-        self.visit_expr(label);
     }
 
     fn visit_case(&mut self, _cnst: &Const, stmt: &StmtAst) {
