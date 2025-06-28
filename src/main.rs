@@ -1,12 +1,13 @@
 use std::cell::RefCell;
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use blang::ast::print::PrettyPrinter;
 use blang::ast::resolve::{NameResolver, ValueChecker};
 use blang::diagnostics::{Diagnostics, SourceMap};
+use blang::ir::CraneliftBackend;
 use blang::lexer::{Lexer, Token, TokenKind};
 use blang::parser::Parser;
 use clap::Parser as _;
@@ -39,10 +40,19 @@ fn main() {
     let defs = parser.parse_program();
     let mut resolver = NameResolver::new(diag.clone());
     let mut checker = ValueChecker::new(diag.clone());
+    let mut ir = CraneliftBackend::new("x86_64", false);
     for def in &defs {
         resolver.visit_def(def);
         checker.visit_def(def);
+        ir.visit_def(def);
     }
+
+    let obj = ir.finish();
+    let mut out_path = args.input.clone();
+    out_path.set_extension("o");
+    println!("Create object file: {}", out_path.display());
+    let mut output = File::create(out_path).unwrap();
+    output.write_all(&obj.emit().unwrap()).unwrap();
 
     if diag.borrow().has_errors() {
         println!("Failed due to following errors:");
