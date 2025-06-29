@@ -1,7 +1,7 @@
 use std::fmt;
 
 use bstr::BStr;
-use strum_macros::EnumDiscriminants;
+use strum_macros::{EnumCount, EnumDiscriminants};
 
 use crate::diagnostics::Span;
 
@@ -9,19 +9,6 @@ use super::interner::InternedStr;
 
 pub const MAX_NAME_LEN: usize = 8;
 pub const MAX_CHAR_LEN: usize = 2;
-
-// TODO: use trie
-const KEYWORDS: [(&[u8], Kw); 9] = [
-    (b"auto", Kw::Auto),
-    (b"extrn", Kw::Extrn),
-    (b"case", Kw::Case),
-    (b"if", Kw::If),
-    (b"else", Kw::Else),
-    (b"while", Kw::While),
-    (b"switch", Kw::Switch),
-    (b"goto", Kw::Goto),
-    (b"return", Kw::Return),
-];
 
 #[derive(Clone, Copy, Debug)]
 pub struct Token {
@@ -33,7 +20,7 @@ pub struct Token {
 pub enum TokenKind {
     Name(InternedStr),
     Number(InternedStr),
-    Char([u8; MAX_CHAR_LEN]),
+    Char(InternedStr),
     String(InternedStr),
     Keyword(Kw),
     Assign(BinOpKind),
@@ -100,7 +87,7 @@ pub enum TokenKind {
     Eof,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, EnumCount)]
 pub enum Kw {
     Auto,
     Extrn,
@@ -169,19 +156,19 @@ impl TokenKind {
         Self::Name(InternedStr::dummy())
     }
 
-    pub fn name_or_keyword(symbols: &[u8]) -> Self {
-        if let Some(kw) = KEYWORDS
-            .iter()
-            .find_map(|(word, kw)| word.eq(&symbols).then_some(kw))
-        {
-            Self::Keyword(*kw)
-        } else {
-            Self::Name(InternedStr::new(symbols))
+    pub fn ident(symbols: &[u8]) -> Self {
+        match InternedStr::new(symbols).to_keyword() {
+            Ok(kw) => Self::Keyword(kw),
+            Err(id) => Self::Name(id),
         }
     }
 
     pub fn number(symbols: &[u8]) -> Self {
         Self::Number(InternedStr::new(symbols))
+    }
+
+    pub fn char(str: &BStr) -> Self {
+        Self::Char(InternedStr::new(str))
     }
 
     pub fn string(str: &BStr) -> Self {
@@ -202,7 +189,7 @@ impl fmt::Display for TokenKind {
         match self {
             Self::Name(name) => write!(f, "Name({:x} {})", name.index(), name.display()),
             Self::Number(number) => write!(f, "Number({:x} {})", number.index(), number.display()),
-            Self::Char(char) => write!(f, "Char({})", BStr::new(char)),
+            Self::Char(char) => write!(f, "Char({:x} {})", char.index(), char.display()),
             Self::String(string) => {
                 write!(f, "String({:x} \"{}\")", string.index(), string.display())
             }

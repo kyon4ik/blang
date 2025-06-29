@@ -1,14 +1,14 @@
 use std::cell::RefCell;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use blang::ast::print::PrettyPrinter;
 use blang::ast::resolve::{NameResolver, ValueChecker};
-use blang::diagnostics::{Diagnostics, SourceMap};
+use blang::diagnostics::Diagnostics;
 use blang::ir::CraneliftBackend;
-use blang::lexer::{Lexer, Token, TokenKind};
+use blang::lexer::Lexer;
 use blang::parser::Parser;
 use clap::Parser as _;
 
@@ -19,8 +19,6 @@ struct Args {
     /// Enable optimisations
     #[arg(short = 'O')]
     optimize: bool,
-    #[arg(long)]
-    print_tokens: bool,
     #[arg(long, default_value_t = 5)]
     max_errors: usize,
 }
@@ -67,40 +65,20 @@ fn main() {
         }
         println!("{}", pp.display());
     }
-
-    if args.print_tokens {
-        let tokens = read_tokens(&src, diag.clone());
-        print_tokens(src, &tokens, &args.input);
-    }
 }
 
-fn read_tokens(src: &[u8], diag: Rc<RefCell<Diagnostics>>) -> Vec<Token> {
-    let mut lexer = Lexer::new(src, diag);
+// fn print_tokens(src: Rc<[u8]>, tokens: &[Token], path: &Path) {
+//     let src_map = SourceMap::new(src, path);
 
-    let mut tokens = Vec::new();
-    loop {
-        let token = lexer.next_token();
-        if token.kind == TokenKind::Eof {
-            break;
-        }
-        tokens.push(token);
-    }
-
-    tokens
-}
-
-fn print_tokens(src: Rc<[u8]>, tokens: &[Token], path: &Path) {
-    let src_map = SourceMap::new(src, path);
-
-    let mut prev_line = 0;
-    for token in tokens {
-        let (start_loc, end_loc) = src_map.locate_span(token.span).unwrap();
-        assert_eq!(start_loc.line, end_loc.line);
-        if prev_line != start_loc.line {
-            println!("{:>3} | {}", start_loc.line, token.kind);
-            prev_line = start_loc.line;
-        } else {
-            println!("     | {}", token.kind);
-        }
-    }
-}
+//     let mut prev_line = 0;
+//     for token in tokens {
+//         let (start_loc, end_loc) = src_map.locate_span(token.span).unwrap();
+//         assert_eq!(start_loc.line, end_loc.line);
+//         if prev_line != start_loc.line {
+//             println!("{:>3} | {}", start_loc.line, token.kind);
+//             prev_line = start_loc.line;
+//         } else {
+//             println!("     | {}", token.kind);
+//         }
+//     }
+// }

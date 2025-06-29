@@ -2,8 +2,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::ast::{
-    AssignOp, AutoDecl, BinOp, Char, Const, ConstKind, DefAst, DefKind, ExprAst, ImmVal, Name,
-    Node, StmtAst, UnOp, UnOpKind, VectorSize,
+    AssignOp, AutoDecl, BinOp, Const, ConstKind, DefAst, DefKind, ExprAst, ImmVal, Name, Node,
+    StmtAst, UnOp, UnOpKind, VectorSize,
 };
 use crate::diagnostics::{DiagErrorKind, Diagnostics, Span};
 use crate::lexer::token::{BinOpKind, Kw};
@@ -374,7 +374,7 @@ impl<'s> Parser<'s> {
             }
             TokenKind::Char(char) => {
                 self.next();
-                ExprAst::Const(Const::new(ConstKind::Char(Char(char)), token.span))
+                ExprAst::Const(Const::new(ConstKind::Char(char), token.span))
             }
             TokenKind::String(str) => {
                 self.next();
@@ -483,7 +483,7 @@ impl<'s> Parser<'s> {
         let val = match kind {
             TokenKind::Name(name) => ImmVal::Name(Name::new(name, span)),
             TokenKind::Number(num) => ImmVal::Const(Const::new(ConstKind::Number(num), span)),
-            TokenKind::Char(char) => ImmVal::Const(Const::new(ConstKind::Char(Char(char)), span)),
+            TokenKind::Char(char) => ImmVal::Const(Const::new(ConstKind::Char(char), span)),
             TokenKind::String(str) => ImmVal::Const(Const::new(ConstKind::String(str), span)),
             kind => {
                 self.error(
@@ -514,7 +514,7 @@ impl<'s> Parser<'s> {
         let token = self.peek();
         let kind = match token.kind {
             TokenKind::Number(num) => ConstKind::Number(num),
-            TokenKind::Char(char) => ConstKind::Char(Char(char)),
+            TokenKind::Char(char) => ConstKind::Char(char),
             TokenKind::String(str) => ConstKind::String(str),
             _ => return Err(token),
         };

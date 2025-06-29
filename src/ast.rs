@@ -3,7 +3,7 @@ pub use node::Node;
 
 use crate::diagnostics::Span;
 use crate::lexer::interner::InternedStr;
-use crate::lexer::token::{BinOpKind, MAX_CHAR_LEN};
+use crate::lexer::token::BinOpKind;
 
 pub mod node;
 pub mod print;
@@ -152,12 +152,9 @@ pub struct Const {
 #[derive(Clone, Copy, Debug)]
 pub enum ConstKind {
     Number(InternedStr),
-    Char(Char),
+    Char(InternedStr),
     String(InternedStr),
 }
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Char(pub [u8; MAX_CHAR_LEN]);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Name {
@@ -175,13 +172,6 @@ impl Const {
             ConstKind::Number(s) | ConstKind::String(s) => s.display(),
             ConstKind::Char(s) => s.display(),
         }
-    }
-}
-
-impl Char {
-    pub fn display(&self) -> &BStr {
-        let end = 1 + (self.0[1] != 0) as usize;
-        BStr::new(&self.0[..end])
     }
 }
 

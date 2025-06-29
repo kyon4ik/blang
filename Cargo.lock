@@ -77,6 +77,8 @@ dependencies = [
  "bstr",
  "clap",
  "cranelift",
+ "indexmap",
+ "rustc-hash",
  "strum",
  "strum_macros",
 ]

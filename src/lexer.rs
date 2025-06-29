@@ -7,7 +7,7 @@ pub use token::{Token, TokenKind};
 
 use crate::diagnostics::{DiagErrorKind, Diagnostics, Span};
 
-pub(crate) mod interner;
+pub mod interner;
 pub mod token;
 
 const EOF_CHAR: u8 = b'\0';
@@ -41,7 +41,7 @@ impl<'s> Lexer<'s> {
             let kind = match self.next() {
                 c if c.is_ascii_alphabetic() || c == b'_' => self.read_name_or_kw(c, start),
                 c if c.is_ascii_digit() => self.read_number(c, start),
-                b'\'' => self.read_char(),
+                b'\'' => self.read_char(start),
                 b'\"' => self.read_string(start),
                 b'=' => self.read_assign_or_eq(),
                 b'(' => OParen,
@@ -143,15 +143,7 @@ impl<'s> Lexer<'s> {
             self.next();
         }
 
-        // FIXME: make a warning (error when --legacy flag)
-        // if self.pos - start > MAX_NAME_LEN {
-        // self.error(
-        //     DiagErrorKind::other(format!("Name is longer than {} chars", MAX_NAME_LEN)),
-        //     Span::new(start, self.pos),
-        // );
-        // }
-
-        TokenKind::name_or_keyword(&self.src[start..self.pos])
+        TokenKind::ident(&self.src[start..self.pos])
     }
 
     fn read_number(&mut self, first: u8, start: usize) -> TokenKind {
@@ -164,32 +156,16 @@ impl<'s> Lexer<'s> {
         TokenKind::number(&self.src[start..self.pos])
     }
 
-    fn read_char(&mut self) -> TokenKind {
-        let mut char = [EOF_CHAR; 2];
-        char[0] = self.next();
-        if char[0] == b'\'' {
-            char[0] = EOF_CHAR;
-            self.error(
-                DiagErrorKind::unexpected("symbol", "character", "'"),
-                Span::new(self.pos - 1, self.pos),
-            );
-        } else {
-            char[1] = self.next();
-            if char[1] != b'\'' {
-                if self.peek() != b'\'' {
-                    self.error(
-                        DiagErrorKind::unexpected("symbol", "'", escape(self.peek())),
-                        Span::new(self.pos, self.pos + 1),
-                    );
-                } else {
-                    self.next();
-                }
-            } else {
-                char[1] = EOF_CHAR;
-            }
+    fn read_char(&mut self, start: usize) -> TokenKind {
+        while !self.is_eof() && self.peek() != b'\'' {
+            self.next();
         }
 
-        TokenKind::Char(char)
+        let kind = TokenKind::char(&self.src[start + 1..self.pos]);
+
+        // skip "
+        self.next();
+        kind
     }
 
     fn read_string(&mut self, start: usize) -> TokenKind {
