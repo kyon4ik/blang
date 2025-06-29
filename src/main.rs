@@ -16,6 +16,9 @@ use clap::Parser as _;
 #[command(version, about, long_about = None)]
 struct Args {
     input: PathBuf,
+    /// Enable optimisations
+    #[arg(short = 'O')]
+    optimize: bool,
     #[arg(long)]
     print_tokens: bool,
     #[arg(long, default_value_t = 5)]
@@ -40,7 +43,7 @@ fn main() {
     let defs = parser.parse_program();
     let mut resolver = NameResolver::new(diag.clone());
     let mut checker = ValueChecker::new(diag.clone());
-    let mut ir = CraneliftBackend::new("x86_64", false);
+    let mut ir = CraneliftBackend::new("x86_64", args.optimize);
     for def in &defs {
         resolver.visit_def(def);
         checker.visit_def(def);

@@ -8,7 +8,7 @@ use crate::lexer::interner::InternedStr;
 use crate::lexer::token::BinOpKind;
 
 use bstr::ByteSlice;
-use cranelift::codegen::ir::{Function, StackSlot, UserFuncName};
+use cranelift::codegen::ir::{Function, UserFuncName};
 use cranelift::codegen::{Context, verify_function};
 use cranelift::module::{Linkage, Module, default_libcall_names};
 use cranelift::object::{ObjectBuilder, ObjectModule, ObjectProduct};
@@ -25,7 +25,7 @@ pub struct CraneliftBackend {
 }
 
 pub struct CraneliftFunction<'f> {
-    vars: HashMap<InternedStr, StackSlot>,
+    vars: HashMap<InternedStr, Value>,
     builder: FunctionBuilder<'f>,
     entry_block: Block,
 }
@@ -34,7 +34,7 @@ impl CraneliftBackend {
     pub fn new(target: &str, optimize: bool) -> Self {
         let mut shared_builder = settings::builder();
         if optimize {
-            shared_builder.set("opt_level", "speed").unwrap();
+            shared_builder.set("opt_level", "speed_and_size").unwrap();
         }
         let shared_flags = settings::Flags::new(shared_builder);
         let isa = isa::lookup_by_name(target)
@@ -79,7 +79,6 @@ impl CraneliftBackend {
                         builder,
                         entry_block,
                     };
-
                     cfunc
                         .builder
                         .append_block_params_for_function_params(entry_block);
@@ -125,14 +124,17 @@ impl CraneliftFunction<'_> {
         let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
             StackSlotKind::ExplicitSlot,
             I64.bytes(),
-            3,
+            I64.bytes().ilog2() as u8,
         ));
-        self.vars.insert(name.value, slot);
+        self.vars
+            .insert(name.value, self.builder.ins().stack_addr(I64, slot, 0));
     }
 
     fn init_var(&mut self, name: &Name, value: Value) {
-        let slot = self.vars.get(&name.value).unwrap();
-        self.builder.ins().stack_store(value, *slot, 0);
+        let addr = self.vars.get(&name.value).unwrap();
+        self.builder
+            .ins()
+            .store(MemFlags::trusted().with_can_move(), value, *addr, 0);
     }
 
     fn load(&mut self, value: BVal) -> Value {
@@ -175,8 +177,8 @@ impl ExprVisitor for CraneliftFunction<'_> {
     type Value = BVal;
 
     fn visit_name(&mut self, name: &Name) -> Self::Value {
-        let slot = self.vars.get(&name.value).unwrap();
-        BVal::Lv(self.builder.ins().stack_addr(I64, *slot, 0))
+        let addr = self.vars.get(&name.value).unwrap();
+        BVal::Lv(*addr)
     }
 
     fn visit_const(&mut self, cnst: &Const) -> Self::Value {
