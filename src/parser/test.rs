@@ -1,28 +1,25 @@
-use bstr::{BStr, ByteSlice};
+use std::path::Path;
+
+use bstr::BStr;
 
 use crate::ast::print::PrettyPrinter;
 use crate::ast::visit::ExprVisitor;
+use crate::diagnostics::{DiagConfig, SourceMap};
 
 use super::*;
 
 fn parser(src: &[u8]) -> Parser {
-    let diag = Rc::new(RefCell::new(Diagnostics::new(
-        src,
-        b"test".to_path().unwrap(),
-        1,
-    )));
+    let src_map = SourceMap::new(src, Path::new(file!()));
+    let config = DiagConfig::default();
+    let diag = Rc::new(Diagnostics::new(config, src_map));
     Parser::new(Lexer::new(src, diag.clone()), diag)
 }
 
 fn tokens(src: &[u8]) -> impl Iterator<Item = Token> {
-    let mut lexer = Lexer::new(
-        src,
-        Rc::new(RefCell::new(Diagnostics::new(
-            src,
-            b"test".to_path().unwrap(),
-            1,
-        ))),
-    );
+    let src_map = SourceMap::new(src, Path::new(file!()));
+    let config = DiagConfig::default();
+    let diag = Rc::new(Diagnostics::new(config, src_map));
+    let mut lexer = Lexer::new(src, diag);
 
     std::iter::from_fn(move || {
         let token = lexer.next_token();

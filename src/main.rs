@@ -1,12 +1,12 @@
-use std::cell::RefCell;
 use std::fs::File;
 use std::io::{Read, Write};
+use std::num::NonZeroU8;
 use std::path::PathBuf;
 use std::rc::Rc;
 
 use blang::ast::print::PrettyPrinter;
 use blang::ast::resolve::{NameResolver, ValueChecker};
-use blang::diagnostics::Diagnostics;
+use blang::diagnostics::{DiagConfig, Diagnostics, SourceMap};
 use blang::ir::CraneliftBackend;
 use blang::lexer::Lexer;
 use blang::parser::Parser;
@@ -19,45 +19,44 @@ struct Args {
     /// Enable optimisations
     #[arg(short = 'O')]
     optimize: bool,
-    #[arg(long, default_value_t = 5)]
-    max_errors: usize,
+    #[arg(long, default_value_t = 3)]
+    max_errors: u8,
 }
 
 fn main() {
     let args = Args::parse();
 
+    // TODO: move this to SourceMap
     let mut input_file = File::open(&args.input).unwrap();
     let mut src = Vec::new();
     input_file.read_to_end(&mut src).unwrap();
 
-    let src: Rc<[u8]> = Rc::from(src);
-    let diag = Rc::new(RefCell::new(Diagnostics::new(
-        &src,
-        &args.input,
-        args.max_errors,
-    )));
+    let source_map = SourceMap::new(&src, &args.input);
+    let config = DiagConfig {
+        max_errors: NonZeroU8::new(args.max_errors),
+    };
+    let diag = Rc::new(Diagnostics::new(config, source_map));
 
     let mut parser = Parser::new(Lexer::new(&src, diag.clone()), diag.clone());
     let defs = parser.parse_program();
     let mut resolver = NameResolver::new(diag.clone());
     let mut checker = ValueChecker::new(diag.clone());
-    let mut ir = CraneliftBackend::new("x86_64", args.optimize);
+    // let mut ir = CraneliftBackend::new("x86_64", args.optimize);
     for def in &defs {
         resolver.visit_def(def);
         checker.visit_def(def);
-        ir.visit_def(def);
+        // ir.visit_def(def);
     }
 
-    let obj = ir.finish();
-    let mut out_path = args.input.clone();
-    out_path.set_extension("o");
-    println!("Create object file: {}", out_path.display());
-    let mut output = File::create(out_path).unwrap();
-    output.write_all(&obj.emit().unwrap()).unwrap();
+    // let obj = ir.finish();
+    // let mut out_path = args.input.clone();
+    // out_path.set_extension("o");
+    // println!("Create object file: {}", out_path.display());
+    // let mut output = File::create(out_path).unwrap();
+    // output.write_all(&obj.emit().unwrap()).unwrap();
 
-    if diag.borrow().has_errors() {
-        println!("Failed due to following errors:");
-        diag.borrow().print_errors();
+    if diag.has_errors() {
+        diag.print_errors().unwrap();
     } else {
         let mut pp = PrettyPrinter::new();
         for def in &defs {

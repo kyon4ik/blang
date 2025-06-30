@@ -1,5 +1,6 @@
 use bstr::BStr;
 pub use node::Node;
+use strum_macros::Display;
 
 use crate::diagnostics::Span;
 use crate::lexer::interner::InternedStr;
@@ -125,15 +126,23 @@ pub struct UnOp {
     pub span: Span,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Display)]
 pub enum UnOpKind {
-    Neg,     // -a
-    Not,     // !a
-    Inc,     // ++a
-    Dec,     // --a
-    Ref,     // &a
-    Deref,   // *a
+    #[strum(to_string = "-")]
+    Neg, // -a
+    #[strum(to_string = "!")]
+    Not, // !a
+    #[strum(to_string = "++")]
+    Inc, // ++a
+    #[strum(to_string = "--")]
+    Dec, // --a
+    #[strum(to_string = "&")]
+    Ref, // &a
+    #[strum(to_string = "*")]
+    Deref, // *a
+    #[strum(to_string = "++")]
     PostInc, // a++
+    #[strum(to_string = "--")]
     PostDec, // a--
 }
 

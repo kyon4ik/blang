@@ -1,8 +1,7 @@
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::diagnostics::{DiagErrorKind, Diagnostics, Span};
+use crate::diagnostics::{Diagnostics, Span};
 use crate::lexer::interner::InternedStr;
 
 use super::visit::{ExprVisitor, StmtVisitor};
@@ -14,15 +13,15 @@ pub struct NameResolver {
     names: HashMap<InternedStr, Span>,
     used_labels: HashMap<InternedStr, Span>,
     labels: HashMap<InternedStr, Span>,
-    diag: Rc<RefCell<Diagnostics>>,
+    diag: Rc<Diagnostics>,
 }
 
 pub struct ValueChecker {
-    diag: Rc<RefCell<Diagnostics>>,
+    diag: Rc<Diagnostics>,
 }
 
 impl ValueChecker {
-    pub fn new(diag: Rc<RefCell<Diagnostics>>) -> Self {
+    pub fn new(diag: Rc<Diagnostics>) -> Self {
         Self { diag }
     }
 
@@ -37,7 +36,7 @@ impl ValueChecker {
 }
 
 impl NameResolver {
-    pub fn new(diag: Rc<RefCell<Diagnostics>>) -> Self {
+    pub fn new(diag: Rc<Diagnostics>) -> Self {
         Self {
             switch_stack: 0,
             globals: HashMap::new(),
@@ -69,10 +68,9 @@ impl NameResolver {
             }
         }
         for (value, span) in self.used_labels.drain() {
-            self.diag.borrow_mut().error(
-                DiagErrorKind::other(format!("Undefined label '{}'.", value.display())),
-                span,
-            );
+            self.diag
+                .error(span, format!("undefined label '{}'.", value.display()))
+                .finish();
         }
     }
 
@@ -90,15 +88,13 @@ impl NameResolver {
             .entry(name.value)
             .and_modify(|span| {
                 if *span != Span::empty() {
-                    let loc = self.diag.borrow().source_map().locate(span.start).unwrap();
-                    self.diag.borrow_mut().error(
-                        DiagErrorKind::other(format!(
-                            "Redefinition of global name {}. First defined here {}.",
-                            name.value.display(),
-                            loc
-                        )),
-                        name.span,
-                    )
+                    self.diag
+                        .error(
+                            name.span,
+                            format!("redefinition of global name {}", name.value.display()),
+                        )
+                        .add_label(*span, "first defined here")
+                        .finish();
                 } else {
                     *span = name.span;
                 }
@@ -110,15 +106,13 @@ impl NameResolver {
         self.names
             .entry(name.value)
             .and_modify(|span| {
-                let loc = self.diag.borrow().source_map().locate(span.start).unwrap();
-                self.diag.borrow_mut().error(
-                    DiagErrorKind::other(format!(
-                        "Redefinition of name {}. First defined here {}.",
-                        name.value.display(),
-                        loc
-                    )),
-                    name.span,
-                )
+                self.diag
+                    .error(
+                        name.span,
+                        format!("redefinition of name {}", name.value.display()),
+                    )
+                    .add_label(*span, "first defined here")
+                    .finish();
             })
             .or_insert(name.span);
     }
@@ -128,14 +122,13 @@ impl NameResolver {
         self.labels
             .entry(name.value)
             .and_modify(|span| {
-                self.diag.borrow_mut().error(
-                    DiagErrorKind::other(format!(
-                        "Redefinition of label {}. First defined here {:?}.",
-                        name.value.display(),
-                        self.diag.borrow().source_map().locate_span(*span)
-                    )),
-                    name.span,
-                )
+                self.diag
+                    .error(
+                        name.span,
+                        format!("redefinition of label {}", name.value.display()),
+                    )
+                    .add_label(*span, "first defined here")
+                    .finish();
             })
             .or_insert(name.span);
     }
@@ -178,10 +171,9 @@ impl ExprVisitor for ValueChecker {
     fn visit_assign(&mut self, op: AssignOp, lhs: &ExprAst, rhs: &ExprAst) -> Self::Value {
         let lhs = self.visit_expr(lhs);
         if lhs != ValType::LValue {
-            self.diag.borrow_mut().error(
-                DiagErrorKind::other("Left side of assignment must be lvalue"),
-                op.span,
-            );
+            self.diag
+                .error(op.span, "left operand of assignment must be lvalue")
+                .finish();
         }
 
         self.visit_expr(rhs);
@@ -194,8 +186,8 @@ impl ExprVisitor for ValueChecker {
         use UnOpKind::*;
         if matches!(op.kind, Inc | Dec | PostInc | PostDec | Ref) && expr != ValType::LValue {
             self.diag
-                .borrow_mut()
-                .error(DiagErrorKind::other("Expression must be lvalue"), op.span);
+                .error(op.span, format!("'{}' expects lvalue as operand", op.kind))
+                .finish();
         }
 
         if op.kind == Deref {
@@ -264,10 +256,9 @@ impl StmtVisitor for NameResolver {
     // TODO: Add 'case' span
     fn visit_case(&mut self, cnst: &Const, stmt: &StmtAst) {
         if self.switch_stack == 0 {
-            self.diag.borrow_mut().error(
-                DiagErrorKind::other("Case statement outside of switch."),
-                cnst.span,
-            )
+            self.diag
+                .error(cnst.span, "case statement outside of switch.")
+                .finish();
         }
         self.visit_stmt(stmt);
     }
@@ -285,10 +276,12 @@ impl ExprVisitor for NameResolver {
 
     fn visit_name(&mut self, name: &Name) {
         if !self.names.contains_key(&name.value) {
-            self.diag.borrow_mut().error(
-                DiagErrorKind::other(format!("Undefined name {}", name.value.display())),
-                name.span,
-            )
+            self.diag
+                .error(
+                    name.span,
+                    format!("undefined name {}", name.value.display()),
+                )
+                .finish()
         }
     }
 

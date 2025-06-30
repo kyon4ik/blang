@@ -1,3 +1,5 @@
+here[];
+
 main() {
 	extrn here, smth;
 here:

@@ -1,26 +1,25 @@
-use std::cell::RefCell;
+use std::fmt;
 use std::rc::Rc;
 
 use crate::ast::{
     AssignOp, AutoDecl, BinOp, Const, ConstKind, DefAst, DefKind, ExprAst, ImmVal, Name, Node,
     StmtAst, UnOp, UnOpKind, VectorSize,
 };
-use crate::diagnostics::{DiagErrorKind, Diagnostics, Span};
+use crate::diagnostics::{Diagnostics, Span};
 use crate::lexer::token::{BinOpKind, Kw};
 use crate::lexer::{Lexer, Token, TokenKind};
 
 #[cfg(test)]
 mod test;
 
-#[derive(Debug)]
 pub struct Parser<'s> {
     lexer: Lexer<'s>,
-    diag: Rc<RefCell<Diagnostics>>,
+    diag: Rc<Diagnostics>,
     next_tok: [Token; 2],
 }
 
 impl<'s> Parser<'s> {
-    pub fn new(mut lexer: Lexer<'s>, diag: Rc<RefCell<Diagnostics>>) -> Self {
+    pub fn new(mut lexer: Lexer<'s>, diag: Rc<Diagnostics>) -> Self {
         let next_tok = [lexer.next_token(), lexer.next_token()];
         Self {
             lexer,
@@ -232,10 +231,7 @@ impl<'s> Parser<'s> {
                     return Some(lhs);
                 }
 
-                self.error(
-                    DiagErrorKind::unexpected("token", "operator or ;", format!("{kind}")),
-                    op_token.span,
-                );
+                self.error_unexpected_str(op_token.span, "assignment operator", kind);
                 return None;
             }
         };
@@ -283,10 +279,7 @@ impl<'s> Parser<'s> {
                             break;
                         }
 
-                        self.error(
-                            DiagErrorKind::unexpected("token", "operator or ;", format!("{kind}")),
-                            op_token.span,
-                        );
+                        self.error_unexpected_str(op_token.span, "binary operator or '?'", kind);
                         return None;
                     }
                 };
@@ -486,10 +479,7 @@ impl<'s> Parser<'s> {
             TokenKind::Char(char) => ImmVal::Const(Const::new(ConstKind::Char(char), span)),
             TokenKind::String(str) => ImmVal::Const(Const::new(ConstKind::String(str), span)),
             kind => {
-                self.error(
-                    DiagErrorKind::unexpected("token", "name or const", format!("{kind}")),
-                    span,
-                );
+                self.error_unexpected_str(span, "name or constant", kind);
                 return None;
             }
         };
@@ -500,12 +490,7 @@ impl<'s> Parser<'s> {
     #[inline]
     fn parse_const(&mut self) -> Option<Const> {
         self.try_parse_const()
-            .inspect_err(|token| {
-                self.error(
-                    DiagErrorKind::unexpected("token", "const", format!("{}", token.kind)),
-                    token.span,
-                )
-            })
+            .inspect_err(|token| self.error_unexpected_str(token.span, "constant", token.kind))
             .ok()
     }
 
@@ -532,10 +517,7 @@ impl<'s> Parser<'s> {
             self.next();
             Some(Name::new(name, token.span))
         } else {
-            self.error(
-                DiagErrorKind::unexpected("token", "Name", format!("{}", token.kind)),
-                token.span,
-            );
+            self.error_unexpected_str(token.span, "name", token.kind);
             None
         }
     }
@@ -649,39 +631,14 @@ impl Parser<'_> {
     #[inline]
     fn consume(&mut self, expected: TokenKind) -> Option<()> {
         self.try_consume(expected)
-            .map_err(|found| {
-                self.error(
-                    DiagErrorKind::unexpected(
-                        "token",
-                        format!("{expected}"),
-                        format!("{}", found.kind),
-                    ),
-                    found.span,
-                )
-            })
+            .map_err(|found| self.error_unexpected(found.span, expected, found.kind))
             .ok()
     }
 
     #[inline]
     fn consume_any(&mut self, expected: &[TokenKind]) -> Option<Token> {
         self.try_consume_any(expected)
-            .map_err(|found| {
-                self.error(
-                    DiagErrorKind::unexpected(
-                        "token",
-                        format!(
-                            "any of {}{}",
-                            expected[0],
-                            expected[1..]
-                                .iter()
-                                .map(|e| format!(", {e}"))
-                                .collect::<String>()
-                        ),
-                        format!("{}", found.kind),
-                    ),
-                    found.span,
-                )
-            })
+            .map_err(|found| self.error_unexpected_many(found.span, expected, found.kind))
             .ok()
     }
 
@@ -692,8 +649,41 @@ impl Parser<'_> {
     }
 
     #[inline]
-    fn error(&mut self, kind: DiagErrorKind, span: Span) {
-        self.diag.borrow_mut().error(kind, span)
+    fn error_unexpected(&mut self, span: Span, expected: TokenKind, found: TokenKind) {
+        self.diag
+            .error(
+                span,
+                format!("unexpected token '{found}', expected '{expected}'"),
+            )
+            .finish()
+    }
+
+    #[inline]
+    fn error_unexpected_str(&mut self, span: Span, expected: impl fmt::Display, found: TokenKind) {
+        self.diag
+            .error(
+                span,
+                format!("unexpected token '{found}', expected {expected}"),
+            )
+            .finish()
+    }
+
+    #[inline]
+    fn error_unexpected_many(&mut self, span: Span, expected: &[TokenKind], found: TokenKind) {
+        let mut expected_str = format!(
+            "any of {}{}",
+            expected[0],
+            expected[1..5.min(expected.len())]
+                .iter()
+                .map(|e| format!(", {e}"))
+                .collect::<String>()
+        );
+
+        if expected.len() > 5 {
+            expected_str.push_str(", ...");
+        }
+
+        self.error_unexpected_str(span, expected_str, found);
     }
 
     #[inline]

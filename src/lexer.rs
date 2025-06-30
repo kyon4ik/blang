@@ -1,26 +1,24 @@
-use std::cell::RefCell;
 use std::rc::Rc;
 
 use bstr::BStr;
 use token::BinOpKind;
 pub use token::{Token, TokenKind};
 
-use crate::diagnostics::{DiagErrorKind, Diagnostics, Span};
+use crate::diagnostics::{Diagnostics, Span};
 
 pub mod interner;
 pub mod token;
 
 const EOF_CHAR: u8 = b'\0';
 
-#[derive(Debug)]
 pub struct Lexer<'s> {
     src: &'s BStr,
     pos: usize,
-    diag: Rc<RefCell<Diagnostics>>,
+    diag: Rc<Diagnostics>,
 }
 
 impl<'s> Lexer<'s> {
-    pub fn new(src: &'s [u8], diag: Rc<RefCell<Diagnostics>>) -> Self {
+    pub fn new(src: &'s [u8], diag: Rc<Diagnostics>) -> Self {
         Self {
             src: BStr::new(src),
             pos: 0,
@@ -89,10 +87,12 @@ impl<'s> Lexer<'s> {
                 b'/' => Slash,
 
                 c => {
-                    self.error(
-                        DiagErrorKind::unexpected("symbol", "valid B symbol", escape(c)),
-                        Span::new(start, self.pos),
-                    );
+                    self.diag
+                        .error(
+                            Span::from((start, self.pos)),
+                            format!("symbol '{}' is not from ASCII set", escape(c)),
+                        )
+                        .finish();
                     continue;
                 }
             };
@@ -100,7 +100,7 @@ impl<'s> Lexer<'s> {
             break (kind, start);
         };
 
-        Token::new(kind, Span::new(start, self.pos))
+        Token::new(kind, Span::from((start, self.pos)))
     }
 
     fn read_assign_or_eq(&mut self) -> TokenKind {
@@ -178,10 +178,6 @@ impl<'s> Lexer<'s> {
         // skip "
         self.next();
         kind
-    }
-
-    fn error(&self, kind: DiagErrorKind, span: Span) {
-        self.diag.borrow_mut().error(kind, span)
     }
 
     fn next_if(&mut self, expect: u8, success: TokenKind, fail: TokenKind) -> TokenKind {

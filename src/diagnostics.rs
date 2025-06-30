@@ -1,195 +1,150 @@
-use std::borrow::Cow;
-use std::fmt;
-use std::path::{Path, PathBuf};
+use std::cell::{RefCell, RefMut};
+use std::convert::Infallible;
+use std::num::NonZeroU8;
+use std::path::Path;
 use std::rc::Rc;
 
-use bstr::{BStr, ByteSlice};
-
-#[derive(Debug)]
-pub struct Diagnostics {
-    src: Rc<[u8]>,
-    errors: Vec<DiagError>,
-    src_map: SourceMap,
-}
-
-#[derive(Clone, Debug)]
-pub struct DiagError {
-    kind: DiagErrorKind,
-    span: Span,
-}
-
-#[non_exhaustive]
-#[derive(Clone, Debug)]
-pub enum DiagErrorKind {
-    Unexpected {
-        ty: Cow<'static, str>,
-        expected: Cow<'static, str>,
-        found: Cow<'static, str>,
-    },
-    Other(Cow<'static, str>),
-}
-
-impl Diagnostics {
-    pub fn new(src: &[u8], path: &Path, max_errors: usize) -> Self {
-        assert!(max_errors > 0);
-
-        let errors = Vec::with_capacity(max_errors);
-        let src: Rc<[u8]> = Rc::from(src);
-        let src_map = SourceMap::new(src.clone(), path);
-
-        Self {
-            src,
-            errors,
-            src_map,
-        }
-    }
-
-    pub fn source_map(&self) -> &SourceMap {
-        &self.src_map
-    }
-
-    pub fn error(&mut self, kind: DiagErrorKind, span: Span) {
-        // max errors reached
-        if self.errors.spare_capacity_mut().is_empty() {
-            return;
-        }
-
-        self.errors.push(DiagError::new(kind, span));
-    }
-
-    pub fn has_errors(&self) -> bool {
-        !self.errors.is_empty()
-    }
-
-    // TODO: better diagnostics
-    pub fn print_errors(&self) {
-        for error in &self.errors {
-            let (start_loc, _end_loc) = self.src_map.locate_span(error.span).unwrap();
-
-            use DiagErrorKind::*;
-            print!(
-                "{}:{}:{} | [ERROR] ",
-                self.src_map.file_path().display(),
-                start_loc.line,
-                start_loc.column
-            );
-            match &error.kind {
-                Unexpected {
-                    ty,
-                    expected,
-                    found,
-                } => println!("Expected {ty} {expected}, found {found}"),
-                Other(msg) => println!("{msg}"),
-            }
-            println!(
-                "HERE -> {}",
-                BStr::new(&self.src[error.span.start..error.span.end])
-            );
-        }
-    }
-}
-
-impl DiagError {
-    pub fn new(kind: DiagErrorKind, span: Span) -> Self {
-        Self { kind, span }
-    }
-}
-
-impl DiagErrorKind {
-    pub fn unexpected<I, J, K>(ty: I, expected: J, found: K) -> Self
-    where
-        I: Into<Cow<'static, str>>,
-        J: Into<Cow<'static, str>>,
-        K: Into<Cow<'static, str>>,
-    {
-        Self::Unexpected {
-            ty: ty.into(),
-            expected: expected.into(),
-            found: found.into(),
-        }
-    }
-
-    pub fn other<I>(msg: I) -> Self
-    where
-        I: Into<Cow<'static, str>>,
-    {
-        Self::Other(msg.into())
-    }
-}
-
-#[derive(Debug)]
-pub struct SourceMap {
-    src: Rc<[u8]>,
-    path: PathBuf,
-    line_starts: Vec<usize>,
-}
-
 #[derive(Clone, Copy, Debug)]
-pub struct SymLoc {
-    pub line: usize,
-    pub column: usize,
+pub struct DiagConfig {
+    pub max_errors: Option<NonZeroU8>,
 }
 
-impl fmt::Display for SymLoc {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.line, self.column)
-    }
+#[derive(Clone)]
+pub struct SourceMap {
+    utf_src: Rc<ariadne::Source<String>>,
+    path: Rc<Path>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Span {
-    pub start: usize,
-    pub end: usize,
+    pub start: u32,
+    pub end: u32,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct FullSpan {
+    pub path: Rc<Path>,
+    pub start: u32,
+    pub end: u32,
+}
+
+pub struct Diagnostics {
+    config: DiagConfig,
+    report_config: ariadne::Config,
+    source_map: SourceMap,
+    errors: RefCell<Vec<ariadne::Report<'static, FullSpan>>>,
+}
+
+pub struct ReportBuilder<'a> {
+    source_map: &'a SourceMap,
+    builder: ariadne::ReportBuilder<'static, FullSpan>,
+    reports: RefMut<'a, Vec<ariadne::Report<'static, FullSpan>>>,
+    config: &'a DiagConfig,
+}
+
+impl ReportBuilder<'_> {
+    #[must_use]
+    pub fn add_label(mut self, span: Span, message: impl ToString) -> Self {
+        let full_span = self.source_map.full_span(span);
+        let label = ariadne::Label::new(full_span)
+            .with_message(message)
+            .with_color(ariadne::Color::Blue);
+        self.builder.add_label(label);
+        self
+    }
+
+    pub fn finish(mut self) {
+        if self.reports.len() < self.config.max_errors() {
+            self.reports.push(self.builder.finish());
+        }
+    }
+}
+
+impl Diagnostics {
+    pub fn new(config: DiagConfig, source_map: SourceMap) -> Self {
+        let report_config = ariadne::Config::new()
+            .with_cross_gap(true)
+            .with_underlines(true)
+            .with_multiline_arrows(true)
+            .with_color(true)
+            .with_index_type(ariadne::IndexType::Byte);
+
+        let max_errors = config.max_errors.map(NonZeroU8::get).unwrap_or(0) as usize;
+        let errors = RefCell::new(Vec::with_capacity(max_errors));
+
+        Self {
+            config,
+            report_config,
+            source_map,
+            errors,
+        }
+    }
+
+    #[must_use]
+    pub fn error(&self, span: Span, message: impl ToString) -> ReportBuilder {
+        let reports = self.errors.borrow_mut();
+        let full_span = self.source_map.full_span(span);
+        let builder = ariadne::Report::build(ariadne::ReportKind::Error, full_span.clone())
+            .with_config(self.report_config)
+            .with_message(message)
+            .with_label(ariadne::Label::new(full_span).with_color(ariadne::Color::Magenta));
+        ReportBuilder {
+            source_map: &self.source_map,
+            builder,
+            config: &self.config,
+            reports,
+        }
+    }
+
+    pub fn has_errors(&self) -> bool {
+        !self.errors.borrow().is_empty()
+    }
+
+    pub fn print_errors(&self) -> std::io::Result<()> {
+        for error in self.errors.borrow().iter() {
+            error.print(&self.source_map)?;
+        }
+        Ok(())
+    }
 }
 
 impl SourceMap {
-    pub fn new(src: Rc<[u8]>, path: &Path) -> Self {
-        let mut line_starts = Vec::new();
-
-        let mut bytes_read = 0;
-        for line in src.lines_with_terminator() {
-            line_starts.push(bytes_read);
-            bytes_read += line.len();
-        }
-
-        line_starts.push(bytes_read);
-
-        debug_assert!(line_starts.is_sorted());
+    pub fn new(src: &[u8], path: &Path) -> Self {
+        let utf_src = ariadne::Source::from(String::from_utf8_lossy(src).into_owned());
 
         Self {
-            src,
-            path: PathBuf::from(path),
-            line_starts,
+            utf_src: Rc::new(utf_src),
+            path: Rc::from(path),
         }
     }
 
-    pub fn locate(&self, pos: usize) -> Option<SymLoc> {
-        let next_line = self
-            .line_starts
-            .partition_point(|line_start| *line_start <= pos);
-
-        self.line_starts.get(next_line).map(|_| {
-            let line_start = self.line_starts[next_line - 1];
-            let column = self.src[line_start..pos].len() + 1;
-            // NOTE: uses next_line, because lines start from 1
-            SymLoc::new(next_line, column)
-        })
-    }
-
-    pub fn locate_span(&self, span: Span) -> Option<(SymLoc, SymLoc)> {
-        match (self.locate(span.start), self.locate(span.end)) {
-            (Some(start), Some(end)) => Some((start, end)),
-            _ => None,
+    pub fn full_span(&self, span: Span) -> FullSpan {
+        FullSpan {
+            path: self.path.clone(),
+            start: span.start,
+            end: span.end,
         }
     }
+}
 
-    pub fn file_path(&self) -> &Path {
-        &self.path
+impl ariadne::Cache<Path> for &SourceMap {
+    type Storage = String;
+
+    fn fetch(
+        &mut self,
+        id: &Path,
+    ) -> Result<&ariadne::Source<Self::Storage>, impl std::fmt::Debug> {
+        debug_assert_eq!(id, self.path.as_ref());
+        Result::<_, Infallible>::Ok(self.utf_src.as_ref())
+    }
+
+    fn display<'a>(&self, id: &'a Path) -> Option<impl std::fmt::Display + 'a> {
+        Some(id.display())
     }
 }
 
 impl Span {
-    pub fn new(start: usize, end: usize) -> Self {
+    pub fn new(start: u32, end: u32) -> Self {
         assert!(start <= end);
         Self { start, end }
     }
@@ -199,8 +154,43 @@ impl Span {
     }
 }
 
-impl SymLoc {
-    pub fn new(line: usize, column: usize) -> Self {
-        Self { line, column }
+impl From<(usize, usize)> for Span {
+    fn from(value: (usize, usize)) -> Self {
+        Span::new(value.0 as u32, value.1 as u32)
+    }
+}
+
+impl ariadne::Span for FullSpan {
+    type SourceId = Path;
+
+    #[inline]
+    fn source(&self) -> &Self::SourceId {
+        self.path.as_ref()
+    }
+
+    #[inline]
+    fn start(&self) -> usize {
+        self.start as usize
+    }
+
+    #[inline]
+    fn end(&self) -> usize {
+        self.end as usize
+    }
+}
+
+impl DiagConfig {
+    pub fn max_errors(&self) -> usize {
+        self.max_errors
+            .map(|me| me.get() as usize)
+            .unwrap_or(usize::MAX)
+    }
+}
+
+impl Default for DiagConfig {
+    fn default() -> Self {
+        Self {
+            max_errors: NonZeroU8::new(1),
+        }
     }
 }

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+ariadne = { version = "0.5.1", features = ["auto-color"] }
 bstr = { version = "1.12.0", default-features = false, features = ["std", "alloc"] }
 clap = { version = "4.5.40", features = ["derive"] }
 cranelift = { version = "0.121.1", features = ["module", "object"] }
