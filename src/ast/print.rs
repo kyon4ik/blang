@@ -1,13 +1,10 @@
 use bstr::{BStr, BString, ByteVec};
 
 use crate::ast::{DefKind, VectorSize};
-use crate::lexer::token::BinOpKind;
+use crate::lexer::token::{BinOpKind, LiteralKind};
 
 use super::visit::{ExprVisitor, StmtVisitor};
-use super::{
-    AssignOp, AutoDecl, BinOp, Const, ConstKind, DefAst, ExprAst, Name, Node, StmtAst, UnOp,
-    UnOpKind,
-};
+use super::{AssignOp, AutoDecl, BinOp, DefAst, ExprAst, Literal, Name, Node, StmtAst, UnOp};
 
 pub struct PrettyPrinter {
     output: BString,
@@ -131,7 +128,7 @@ impl StmtVisitor for PrettyPrinter {
         todo!()
     }
 
-    fn visit_case(&mut self, _cnst: &Const, _stmt: &StmtAst) {
+    fn visit_case(&mut self, _cnst: &Literal, _stmt: &StmtAst) {
         todo!()
     }
 
@@ -154,20 +151,15 @@ impl ExprVisitor for PrettyPrinter {
         self.output.push_str(name.as_str());
     }
 
-    fn visit_const(&mut self, cnst: &Const) {
-        match cnst.kind {
-            ConstKind::Number(num) => self.output.push_str(num.display()),
-            ConstKind::Char(char) => {
-                self.output.push(b'\'');
-                self.output.push_str(char.display());
-                self.output.push(b'\'');
-            }
-            ConstKind::String(str) => {
-                self.output.push(b'"');
-                self.output.push_str(str.display());
-                self.output.push(b'"');
-            }
-        }
+    fn visit_const(&mut self, cnst: &Literal) {
+        let delim = match cnst.kind {
+            LiteralKind::Number => None,
+            LiteralKind::Char => Some(b'\''),
+            LiteralKind::String => Some(b'"'),
+        };
+        delim.inspect(|d| self.output.push(*d));
+        self.output.push_str(cnst.value.display());
+        delim.inspect(|d| self.output.push(*d));
     }
 
     fn visit_group(&mut self, group: &ExprAst) {
@@ -175,26 +167,10 @@ impl ExprVisitor for PrettyPrinter {
     }
 
     fn visit_assign(&mut self, op: AssignOp, lhs: &ExprAst, rhs: &ExprAst) {
-        let op_str: &[u8] = match op.kind {
-            Some(BinOpKind::Or) => b"=|",
-            Some(BinOpKind::And) => b"=&",
-            Some(BinOpKind::Eq) => b"===",
-            Some(BinOpKind::Neq) => b"=!=",
-            Some(BinOpKind::Lt) => b"=<",
-            Some(BinOpKind::LtEq) => b"=<=",
-            Some(BinOpKind::Gt) => b"=>",
-            Some(BinOpKind::GtEq) => b"=>=",
-            Some(BinOpKind::Shl) => b"=<<",
-            Some(BinOpKind::Shr) => b"=>>",
-            Some(BinOpKind::Add) => b"=+",
-            Some(BinOpKind::Sub) => b"=-",
-            Some(BinOpKind::Rem) => b"=%",
-            Some(BinOpKind::Mul) => b"=*",
-            Some(BinOpKind::Div) => b"=/",
-            None => b"=",
-        };
+        let op_str: Option<&str> = op.kind.map(|kind| kind.into());
         self.output.push(b'(');
-        self.output.push_str(op_str);
+        self.output.push(b'=');
+        op_str.inspect(|op| self.output.push_str(op));
         self.output.push(b' ');
         self.visit_expr(lhs);
         self.output.push(b' ');
@@ -203,17 +179,7 @@ impl ExprVisitor for PrettyPrinter {
     }
 
     fn visit_unary(&mut self, op: UnOp, expr: &ExprAst) {
-        let op_str: &[u8] = match op.kind {
-            UnOpKind::Neg => b"-",
-            UnOpKind::Not => b"!",
-            UnOpKind::Inc => b"++",
-            UnOpKind::Dec => b"--",
-            UnOpKind::Ref => b"&",
-            UnOpKind::Deref => b"*",
-            UnOpKind::PostInc => b"$++",
-            UnOpKind::PostDec => b"$--",
-        };
-
+        let op_str: &str = op.kind.into();
         self.output.push(b'(');
         self.output.push_str(op_str);
         self.output.push(b' ');

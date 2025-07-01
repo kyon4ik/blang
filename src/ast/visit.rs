@@ -21,7 +21,7 @@ pub trait StmtVisitor: ExprVisitor {
         self.visit_stmt(stmt);
     }
 
-    fn visit_case(&mut self, _cnst: &Const, stmt: &StmtAst) {
+    fn visit_case(&mut self, _cnst: &Literal, stmt: &StmtAst) {
         self.visit_stmt(stmt);
     }
 
@@ -74,7 +74,7 @@ pub trait ExprVisitor {
     type Value;
 
     fn visit_name(&mut self, name: &Name) -> Self::Value;
-    fn visit_const(&mut self, cnst: &Const) -> Self::Value;
+    fn visit_const(&mut self, cnst: &Literal) -> Self::Value;
     fn visit_group(&mut self, group: &ExprAst) -> Self::Value;
     fn visit_assign(&mut self, op: AssignOp, lhs: &ExprAst, rhs: &ExprAst) -> Self::Value;
     fn visit_unary(&mut self, op: UnOp, expr: &ExprAst) -> Self::Value;

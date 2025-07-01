@@ -1,7 +1,6 @@
 use std::fmt;
 
-use bstr::BStr;
-use strum_macros::{EnumCount, EnumDiscriminants};
+use strum_macros::{Display, EnumCount, EnumDiscriminants, IntoStaticStr};
 
 use crate::diagnostics::Span;
 
@@ -16,12 +15,10 @@ pub struct Token {
     pub span: Span,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, EnumDiscriminants)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, EnumDiscriminants, Display)]
 pub enum TokenKind {
     Name(InternedStr),
-    Number(InternedStr),
-    Char(InternedStr),
-    String(InternedStr),
+    Literal(Literal),
     Keyword(Kw),
     Assign(BinOpKind),
 
@@ -100,23 +97,38 @@ pub enum Kw {
     Return,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, IntoStaticStr)]
 pub enum BinOpKind {
-    Or,   // |
-    And,  // &
-    Eq,   // ==
-    Neq,  // !=
-    Lt,   // <
+    #[strum(serialize = "|")]
+    Or, // |
+    #[strum(serialize = "&")]
+    And, // &
+    #[strum(serialize = "==")]
+    Eq, // ==
+    #[strum(serialize = "!=")]
+    Neq, // !=
+    #[strum(serialize = "<")]
+    Lt, // <
+    #[strum(serialize = "<=")]
     LtEq, // <=
-    Gt,   // >
+    #[strum(serialize = ">")]
+    Gt, // >
+    #[strum(serialize = ">=")]
     GtEq, // >=
-    Shl,  // <<
-    Shr,  // >>
-    Add,  // +
-    Sub,  // -
-    Rem,  // %
-    Mul,  // *
-    Div,  // /
+    #[strum(serialize = "<<")]
+    Shl, // <<
+    #[strum(serialize = ">>")]
+    Shr, // >>
+    #[strum(serialize = "+")]
+    Add, // +
+    #[strum(serialize = "-")]
+    Sub, // -
+    #[strum(serialize = "%")]
+    Rem, // %
+    #[strum(serialize = "*")]
+    Mul, // *
+    #[strum(serialize = "/")]
+    Div, // /
 }
 
 impl BinOpKind {
@@ -163,18 +175,6 @@ impl TokenKind {
         }
     }
 
-    pub fn number(symbols: &[u8]) -> Self {
-        Self::Number(InternedStr::new(symbols))
-    }
-
-    pub fn char(str: &BStr) -> Self {
-        Self::Char(InternedStr::new(str))
-    }
-
-    pub fn string(str: &BStr) -> Self {
-        Self::String(InternedStr::new(str))
-    }
-
     pub fn matches(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Keyword(a), Self::Keyword(b)) => a.eq(b),
@@ -184,16 +184,36 @@ impl TokenKind {
     }
 }
 
-impl fmt::Display for TokenKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Name(name) => write!(f, "Name({:x} {})", name.index(), name.display()),
-            Self::Number(number) => write!(f, "Number({:x} {})", number.index(), number.display()),
-            Self::Char(char) => write!(f, "Char({:x} {})", char.index(), char.display()),
-            Self::String(string) => {
-                write!(f, "String({:x} \"{}\")", string.index(), string.display())
-            }
-            other => write!(f, "{other:?}"),
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Display)]
+pub enum LiteralKind {
+    Number,
+    Char,
+    String,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Literal {
+    pub kind: LiteralKind,
+    pub value: InternedStr,
+}
+
+impl Literal {
+    pub fn new(kind: LiteralKind, value: &[u8]) -> Self {
+        Self {
+            kind,
+            value: InternedStr::new(value),
         }
+    }
+}
+
+impl fmt::Display for Literal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}#{}: {}",
+            self.kind,
+            self.value.index(),
+            self.value.display()
+        )
     }
 }

@@ -157,7 +157,7 @@ impl ExprVisitor for ValueChecker {
     }
 
     #[inline]
-    fn visit_const(&mut self, _cnst: &Const) -> Self::Value {
+    fn visit_const(&mut self, _cnst: &Literal) -> Self::Value {
         ValType::RValue
     }
 
@@ -254,7 +254,7 @@ impl StmtVisitor for NameResolver {
     }
 
     // TODO: Add 'case' span
-    fn visit_case(&mut self, cnst: &Const, stmt: &StmtAst) {
+    fn visit_case(&mut self, cnst: &Literal, stmt: &StmtAst) {
         if self.switch_stack == 0 {
             self.diag
                 .error(cnst.span, "case statement outside of switch.")
@@ -285,7 +285,7 @@ impl ExprVisitor for NameResolver {
         }
     }
 
-    fn visit_const(&mut self, _cnst: &Const) {}
+    fn visit_const(&mut self, _cnst: &Literal) {}
 
     fn visit_group(&mut self, group: &ExprAst) -> Self::Value {
         self.visit_expr(group);

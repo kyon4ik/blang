@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use bstr::BStr;
-use token::BinOpKind;
+use token::{BinOpKind, Literal, LiteralKind};
 pub use token::{Token, TokenKind};
 
 use crate::diagnostics::{Diagnostics, Span};
@@ -15,6 +15,14 @@ pub struct Lexer<'s> {
     src: &'s BStr,
     pos: usize,
     diag: Rc<Diagnostics>,
+}
+
+fn is_ident_start(c: u8) -> bool {
+    matches!(c, b'a'..=b'z' | b'A'..=b'Z' | b'_')
+}
+
+fn is_ident_continue(c: u8) -> bool {
+    matches!(c, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_')
 }
 
 impl<'s> Lexer<'s> {
@@ -37,7 +45,7 @@ impl<'s> Lexer<'s> {
 
             let start = self.pos;
             let kind = match self.next() {
-                c if c.is_ascii_alphabetic() || c == b'_' => self.read_name_or_kw(c, start),
+                c if is_ident_start(c) => self.read_ident(c, start),
                 c if c.is_ascii_digit() => self.read_number(c, start),
                 b'\'' => self.read_char(start),
                 b'\"' => self.read_string(start),
@@ -136,10 +144,10 @@ impl<'s> Lexer<'s> {
         TokenKind::Assign(binop)
     }
 
-    fn read_name_or_kw(&mut self, first: u8, start: usize) -> TokenKind {
-        debug_assert!(first.is_ascii_alphabetic());
+    fn read_ident(&mut self, first: u8, start: usize) -> TokenKind {
+        debug_assert!(is_ident_start(first));
 
-        while self.peek().is_ascii_alphanumeric() || self.peek() == b'_' {
+        while is_ident_continue(self.peek()) {
             self.next();
         }
 
@@ -153,7 +161,10 @@ impl<'s> Lexer<'s> {
             self.next();
         }
 
-        TokenKind::number(&self.src[start..self.pos])
+        TokenKind::Literal(Literal::new(
+            LiteralKind::Number,
+            &self.src[start..self.pos],
+        ))
     }
 
     fn read_char(&mut self, start: usize) -> TokenKind {
@@ -161,7 +172,10 @@ impl<'s> Lexer<'s> {
             self.next();
         }
 
-        let kind = TokenKind::char(&self.src[start + 1..self.pos]);
+        let kind = TokenKind::Literal(Literal::new(
+            LiteralKind::Char,
+            &self.src[start + 1..self.pos],
+        ));
 
         // skip "
         self.next();
@@ -173,7 +187,10 @@ impl<'s> Lexer<'s> {
             self.next();
         }
 
-        let kind = TokenKind::string(&self.src[start + 1..self.pos]);
+        let kind = TokenKind::Literal(Literal::new(
+            LiteralKind::String,
+            &self.src[start + 1..self.pos],
+        ));
 
         // skip "
         self.next();

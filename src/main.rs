@@ -8,7 +8,6 @@ use blang::ast::print::PrettyPrinter;
 use blang::ast::resolve::{NameResolver, ValueChecker};
 use blang::diagnostics::{DiagConfig, Diagnostics, SourceMap};
 use blang::ir::CraneliftBackend;
-use blang::lexer::Lexer;
 use blang::parser::Parser;
 use clap::Parser as _;
 
@@ -19,6 +18,7 @@ struct Args {
     /// Enable optimisations
     #[arg(short = 'O')]
     optimize: bool,
+    /// Maximal number of errors
     #[arg(long, default_value_t = 3)]
     max_errors: u8,
 }
@@ -37,7 +37,7 @@ fn main() {
     };
     let diag = Rc::new(Diagnostics::new(config, source_map));
 
-    let mut parser = Parser::new(Lexer::new(&src, diag.clone()), diag.clone());
+    let mut parser = Parser::new(&src, diag.clone());
     let defs = parser.parse_program();
     let mut resolver = NameResolver::new(diag.clone());
     let mut checker = ValueChecker::new(diag.clone());

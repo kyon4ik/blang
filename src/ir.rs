@@ -1,11 +1,9 @@
 use std::collections::HashMap;
 
 use crate::ast::visit::{ExprVisitor, StmtVisitor};
-use crate::ast::{
-    AssignOp, AutoDecl, BinOp, Const, ConstKind, DefAst, ExprAst, Name, Node, UnOp, UnOpKind,
-};
+use crate::ast::{AssignOp, AutoDecl, BinOp, DefAst, ExprAst, Literal, Name, Node, UnOp, UnOpKind};
 use crate::lexer::interner::InternedStr;
-use crate::lexer::token::BinOpKind;
+use crate::lexer::token::{BinOpKind, LiteralKind};
 
 use bstr::ByteSlice;
 use cranelift::codegen::ir::{Function, UserFuncName};
@@ -181,15 +179,21 @@ impl ExprVisitor for CraneliftFunction<'_> {
         BVal::Lv(*addr)
     }
 
-    fn visit_const(&mut self, cnst: &Const) -> Self::Value {
+    fn visit_const(&mut self, cnst: &Literal) -> Self::Value {
         match cnst.kind {
-            ConstKind::Number(num) => {
+            LiteralKind::Number => {
                 // FIXME: store in hashmap
-                let value = num.display().to_str().unwrap().parse::<i64>().unwrap();
+                let value = cnst
+                    .value
+                    .display()
+                    .to_str()
+                    .unwrap()
+                    .parse::<i64>()
+                    .unwrap();
                 BVal::Rv(self.builder.ins().iconst(I64, value))
             }
-            ConstKind::Char(_) => todo!(),
-            ConstKind::String(_) => todo!(),
+            LiteralKind::Char => todo!(),
+            LiteralKind::String => todo!(),
         }
     }
 

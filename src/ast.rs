@@ -1,10 +1,11 @@
 use bstr::BStr;
 pub use node::Node;
-use strum_macros::Display;
+use strum_macros::{Display, IntoStaticStr};
 
 use crate::diagnostics::Span;
+use crate::lexer;
 use crate::lexer::interner::InternedStr;
-use crate::lexer::token::BinOpKind;
+use crate::lexer::token::{BinOpKind, LiteralKind};
 
 pub mod node;
 pub mod print;
@@ -33,7 +34,7 @@ pub enum DefKind {
 pub enum VectorSize {
     Undef,
     Zero,
-    Def(Const),
+    Def(Literal),
 }
 
 #[derive(Debug)]
@@ -53,7 +54,7 @@ pub enum StmtAst {
         stmt: Node<StmtAst>,
     },
     Case {
-        cnst: Const,
+        cnst: Literal,
         stmt: Node<StmtAst>,
     },
     Goto(Name),
@@ -71,7 +72,7 @@ pub enum StmtAst {
 #[derive(Debug)]
 pub enum ExprAst {
     Name(Name),
-    Const(Const),
+    Const(Literal),
     Group(Node<ExprAst>),
     Assign {
         op: AssignOp,
@@ -105,7 +106,7 @@ pub enum ExprAst {
 #[derive(Clone, Copy, Debug)]
 pub struct AutoDecl {
     pub name: Name,
-    pub value: Option<Const>,
+    pub value: Option<Literal>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -126,43 +127,37 @@ pub struct UnOp {
     pub span: Span,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Display)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, IntoStaticStr, Display)]
 pub enum UnOpKind {
-    #[strum(to_string = "-")]
+    #[strum(serialize = "-")]
     Neg, // -a
-    #[strum(to_string = "!")]
+    #[strum(serialize = "!")]
     Not, // !a
-    #[strum(to_string = "++")]
+    #[strum(serialize = "++()")]
     Inc, // ++a
-    #[strum(to_string = "--")]
+    #[strum(serialize = "--()")]
     Dec, // --a
-    #[strum(to_string = "&")]
+    #[strum(serialize = "&")]
     Ref, // &a
-    #[strum(to_string = "*")]
+    #[strum(serialize = "*")]
     Deref, // *a
-    #[strum(to_string = "++")]
+    #[strum(serialize = "()++")]
     PostInc, // a++
-    #[strum(to_string = "--")]
+    #[strum(serialize = "()--")]
     PostDec, // a--
 }
 
 #[derive(Clone, Copy, Debug)]
 pub enum ImmVal {
-    Const(Const),
+    Const(Literal),
     Name(Name),
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct Const {
-    pub kind: ConstKind,
+pub struct Literal {
+    pub kind: LiteralKind,
+    pub value: InternedStr,
     pub span: Span,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum ConstKind {
-    Number(InternedStr),
-    Char(InternedStr),
-    String(InternedStr),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -171,15 +166,12 @@ pub struct Name {
     pub span: Span,
 }
 
-impl Const {
-    pub fn new(kind: ConstKind, span: Span) -> Self {
-        Self { kind, span }
-    }
-
-    pub fn as_str(&self) -> &BStr {
-        match &self.kind {
-            ConstKind::Number(s) | ConstKind::String(s) => s.display(),
-            ConstKind::Char(s) => s.display(),
+impl Literal {
+    pub fn new(lit: lexer::token::Literal, span: Span) -> Self {
+        Self {
+            kind: lit.kind,
+            value: lit.value,
+            span,
         }
     }
 }

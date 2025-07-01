@@ -2,8 +2,8 @@ use std::fmt;
 use std::rc::Rc;
 
 use crate::ast::{
-    AssignOp, AutoDecl, BinOp, Const, ConstKind, DefAst, DefKind, ExprAst, ImmVal, Name, Node,
-    StmtAst, UnOp, UnOpKind, VectorSize,
+    AssignOp, AutoDecl, BinOp, DefAst, DefKind, ExprAst, ImmVal, Literal, Name, Node, StmtAst,
+    UnOp, UnOpKind, VectorSize,
 };
 use crate::diagnostics::{Diagnostics, Span};
 use crate::lexer::token::{BinOpKind, Kw};
@@ -19,7 +19,8 @@ pub struct Parser<'s> {
 }
 
 impl<'s> Parser<'s> {
-    pub fn new(mut lexer: Lexer<'s>, diag: Rc<Diagnostics>) -> Self {
+    pub fn new(src: &'s [u8], diag: Rc<Diagnostics>) -> Self {
+        let mut lexer = Lexer::new(src, diag.clone());
         let next_tok = [lexer.next_token(), lexer.next_token()];
         Self {
             lexer,
@@ -361,17 +362,9 @@ impl<'s> Parser<'s> {
                 self.next();
                 ExprAst::Name(Name::new(name, token.span))
             }
-            TokenKind::Number(num) => {
+            TokenKind::Literal(lit) => {
                 self.next();
-                ExprAst::Const(Const::new(ConstKind::Number(num), token.span))
-            }
-            TokenKind::Char(char) => {
-                self.next();
-                ExprAst::Const(Const::new(ConstKind::Char(char), token.span))
-            }
-            TokenKind::String(str) => {
-                self.next();
-                ExprAst::Const(Const::new(ConstKind::String(str), token.span))
+                ExprAst::Const(Literal::new(lit, token.span))
             }
             TokenKind::OParen => self.parse_expr_group()?,
             _ => self.parse_expr_unary()?,
@@ -475,9 +468,7 @@ impl<'s> Parser<'s> {
         let Token { kind, span } = self.peek();
         let val = match kind {
             TokenKind::Name(name) => ImmVal::Name(Name::new(name, span)),
-            TokenKind::Number(num) => ImmVal::Const(Const::new(ConstKind::Number(num), span)),
-            TokenKind::Char(char) => ImmVal::Const(Const::new(ConstKind::Char(char), span)),
-            TokenKind::String(str) => ImmVal::Const(Const::new(ConstKind::String(str), span)),
+            TokenKind::Literal(lit) => ImmVal::Const(Literal::new(lit, span)),
             kind => {
                 self.error_unexpected_str(span, "name or constant", kind);
                 return None;
@@ -488,26 +479,21 @@ impl<'s> Parser<'s> {
     }
 
     #[inline]
-    fn parse_const(&mut self) -> Option<Const> {
+    fn parse_const(&mut self) -> Option<Literal> {
         self.try_parse_const()
             .inspect_err(|token| self.error_unexpected_str(token.span, "constant", token.kind))
             .ok()
     }
 
     #[inline]
-    fn try_parse_const(&mut self) -> Result<Const, Token> {
+    fn try_parse_const(&mut self) -> Result<Literal, Token> {
         let token = self.peek();
-        let kind = match token.kind {
-            TokenKind::Number(num) => ConstKind::Number(num),
-            TokenKind::Char(char) => ConstKind::Char(char),
-            TokenKind::String(str) => ConstKind::String(str),
-            _ => return Err(token),
-        };
-        self.next();
-        Ok(Const {
-            kind,
-            span: token.span,
-        })
+        if let TokenKind::Literal(lit) = token.kind {
+            self.next();
+            Ok(Literal::new(lit, token.span))
+        } else {
+            Err(token)
+        }
     }
 
     #[inline]
@@ -536,9 +522,7 @@ fn follows_expr(kind: TokenKind) -> bool {
         // statement start (from switch syntax)
         Keyword(Kw::Auto | Kw::Extrn | Kw::Case | Kw::If | Kw::While | Kw::Switch | Kw::Goto | Kw::Return) |
         Name(_) |
-        Number(_) |
-        Char(_) |
-        String(_) |
+        Literal(_) |
         OBrace |
         OParen |
         Star |
@@ -556,12 +540,7 @@ impl Parser<'_> {
             if matches!(self.peek().kind, TokenKind::Name(_))
                 && matches!(
                     self.peek2().kind,
-                    TokenKind::OParen
-                        | TokenKind::OBrack
-                        | TokenKind::String(_)
-                        | TokenKind::Char(_)
-                        | TokenKind::Number(_)
-                        | TokenKind::Name(_)
+                    TokenKind::OParen | TokenKind::OBrack | TokenKind::Literal(_)
                 )
             {
                 break;

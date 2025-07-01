@@ -12,7 +12,7 @@ fn parser(src: &[u8]) -> Parser {
     let src_map = SourceMap::new(src, Path::new(file!()));
     let config = DiagConfig::default();
     let diag = Rc::new(Diagnostics::new(config, src_map));
-    Parser::new(Lexer::new(src, diag.clone()), diag)
+    Parser::new(src, diag)
 }
 
 fn tokens(src: &[u8]) -> impl Iterator<Item = Token> {
@@ -45,7 +45,7 @@ fn test_expr(src: &[u8], dst: &[u8]) {
 
 #[test]
 fn postfix() {
-    test_expr(b"--a++;", b"(-- ($++ a))");
+    test_expr(b"--a++;", b"(--() (()++ a))");
     test_expr(b"!b[10](a);", b"(! ($call ([] b 10) a))");
 }
 
@@ -58,7 +58,7 @@ fn assign() {
 #[test]
 fn prefix() {
     test_expr(b"!-1 + 2;", b"(+ (! (- 1)) 2)");
-    test_expr(b"++&(*--t);", b"(++ (& (* (-- t))))");
+    test_expr(b"++&(*--t);", b"(++() (& (* (--() t))))");
 }
 
 #[test]
