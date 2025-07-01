@@ -7,7 +7,7 @@ use std::rc::Rc;
 use blang::ast::print::PrettyPrinter;
 use blang::ast::resolve::{NameResolver, ValueChecker};
 use blang::diagnostics::{DiagConfig, Diagnostics, SourceMap};
-use blang::ir::CraneliftBackend;
+// use blang::ir::CraneliftBackend;
 use blang::parser::Parser;
 use clap::Parser as _;
 

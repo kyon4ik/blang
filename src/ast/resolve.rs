@@ -61,7 +61,7 @@ impl NameResolver {
                 }
             }
             DefKind::Function { params, body } => {
-                for param in params {
+                for param in &params.params {
                     self.declare_name(param);
                 }
                 self.visit_stmt(body);
@@ -135,11 +135,11 @@ impl NameResolver {
 }
 
 impl StmtVisitor for ValueChecker {
-    fn visit_auto(&mut self, _decls: &[AutoDecl]) {}
+    fn visit_auto(&mut self, _auto: &AutoStmt) {}
 
-    fn visit_extrn(&mut self, _names: &[Name]) {}
+    fn visit_extrn(&mut self, _extrn: &ExtrnStmt) {}
 
-    fn visit_goto(&mut self, _label: &Name) {}
+    fn visit_goto(&mut self, _goto: &GotoStmt) {}
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -162,68 +162,68 @@ impl ExprVisitor for ValueChecker {
     }
 
     #[inline]
-    fn visit_group(&mut self, group: &ExprAst) -> Self::Value {
-        self.visit_expr(group);
+    fn visit_group(&mut self, group: &GroupExpr) -> Self::Value {
+        self.visit_expr(&group.expr);
         ValType::RValue
     }
 
     #[inline]
-    fn visit_assign(&mut self, op: AssignOp, lhs: &ExprAst, rhs: &ExprAst) -> Self::Value {
-        let lhs = self.visit_expr(lhs);
+    fn visit_assign(&mut self, assign: &AssignExpr) -> Self::Value {
+        let lhs = self.visit_expr(&assign.lhs);
         if lhs != ValType::LValue {
             self.diag
-                .error(op.span, "left operand of assignment must be lvalue")
+                .error(assign.op.span, "left operand of assignment must be lvalue")
+                .add_label(assign.lhs.span, "found rvalue")
                 .finish();
         }
 
-        self.visit_expr(rhs);
+        self.visit_expr(&assign.rhs);
         ValType::RValue
     }
 
-    fn visit_unary(&mut self, op: UnOp, expr: &ExprAst) -> Self::Value {
-        let expr = self.visit_expr(expr);
+    fn visit_unary(&mut self, unary: &UnaryExpr) -> Self::Value {
+        let expr = self.visit_expr(&unary.expr);
 
         use UnOpKind::*;
-        if matches!(op.kind, Inc | Dec | PostInc | PostDec | Ref) && expr != ValType::LValue {
+        if matches!(unary.op.kind, Inc | Dec | PostInc | PostDec | Ref) && expr != ValType::LValue {
             self.diag
-                .error(op.span, format!("'{}' expects lvalue as operand", op.kind))
+                .error(
+                    unary.op.span,
+                    format!("'{}' expects lvalue as operand", unary.op.kind),
+                )
+                .add_label(unary.expr.span, "found rvalue")
                 .finish();
         }
 
-        if op.kind == Deref {
+        if unary.op.kind == Deref {
             ValType::LValue
         } else {
             ValType::RValue
         }
     }
 
-    fn visit_binary(&mut self, _op: BinOp, lhs: &ExprAst, rhs: &ExprAst) -> Self::Value {
-        self.visit_expr(lhs);
-        self.visit_expr(rhs);
+    fn visit_binary(&mut self, binary: &BinaryExpr) -> Self::Value {
+        self.visit_expr(&binary.lhs);
+        self.visit_expr(&binary.rhs);
         ValType::RValue
     }
 
-    fn visit_offset(&mut self, base: &ExprAst, offset: &ExprAst) -> Self::Value {
-        self.visit_expr(base);
-        self.visit_expr(offset);
+    fn visit_offset(&mut self, offset: &OffsetExpr) -> Self::Value {
+        self.visit_expr(&offset.base);
+        self.visit_expr(&offset.offset);
         ValType::LValue
     }
 
-    fn visit_ternary(
-        &mut self,
-        cond: &ExprAst,
-        then_expr: &ExprAst,
-        else_expr: &ExprAst,
-    ) -> Self::Value {
-        self.visit_expr(cond);
-        self.visit_expr(then_expr);
-        self.visit_expr(else_expr);
+    fn visit_ternary(&mut self, ternary: &TernaryExpr) -> Self::Value {
+        self.visit_expr(&ternary.cond);
+        self.visit_expr(&ternary.then_expr);
+        self.visit_expr(&ternary.else_expr);
         ValType::RValue
     }
 
-    fn visit_call(&mut self, callee: &ExprAst, args: &[Node<ExprAst>]) -> Self::Value {
-        self.visit_expr(callee);
-        for arg in args {
+    fn visit_call(&mut self, call: &CallExpr) -> Self::Value {
+        self.visit_expr(&call.callee);
+        for arg in &call.args {
             self.visit_expr(arg);
         }
         ValType::RValue
@@ -231,42 +231,42 @@ impl ExprVisitor for ValueChecker {
 }
 
 impl StmtVisitor for NameResolver {
-    fn visit_auto(&mut self, decls: &[AutoDecl]) {
-        for decl in decls {
+    fn visit_auto(&mut self, auto: &AutoStmt) {
+        for decl in &auto.decls {
             self.declare_name(&decl.name);
         }
     }
 
-    fn visit_extrn(&mut self, names: &[Name]) {
-        for name in names {
+    fn visit_extrn(&mut self, extrn: &ExtrnStmt) {
+        for name in &extrn.names {
             self.use_global(name);
             self.declare_name(name);
         }
     }
 
-    fn visit_goto(&mut self, label: &Name) {
-        self.use_label(label);
+    fn visit_goto(&mut self, goto: &GotoStmt) {
+        self.use_label(&goto.label);
     }
 
-    fn visit_label(&mut self, name: &Name, stmt: &StmtAst) {
-        self.declare_label(name);
-        self.visit_stmt(stmt);
+    fn visit_label(&mut self, label: &LabelStmt) {
+        self.declare_label(&label.name);
+        self.visit_stmt(&label.stmt);
     }
 
     // TODO: Add 'case' span
-    fn visit_case(&mut self, cnst: &Literal, stmt: &StmtAst) {
+    fn visit_case(&mut self, case: &CaseStmt) {
         if self.switch_stack == 0 {
             self.diag
-                .error(cnst.span, "case statement outside of switch.")
+                .error(case.cnst.span, "case statement outside of switch.")
                 .finish();
         }
-        self.visit_stmt(stmt);
+        self.visit_stmt(&case.stmt);
     }
 
-    fn visit_switch(&mut self, cond: &ExprAst, stmt: &StmtAst) {
+    fn visit_switch(&mut self, switch: &SwitchStmt) {
         self.switch_stack += 1;
-        self.visit_expr(cond);
-        self.visit_stmt(stmt);
+        self.visit_expr(&switch.cond);
+        self.visit_stmt(&switch.stmt);
         self.switch_stack -= 1;
     }
 }
@@ -287,41 +287,38 @@ impl ExprVisitor for NameResolver {
 
     fn visit_const(&mut self, _cnst: &Literal) {}
 
-    fn visit_group(&mut self, group: &ExprAst) -> Self::Value {
-        self.visit_expr(group);
+    fn visit_group(&mut self, group: &GroupExpr) -> Self::Value {
+        self.visit_expr(&group.expr);
     }
 
-    fn visit_assign(&mut self, op: AssignOp, lhs: &ExprAst, rhs: &ExprAst) {
-        let _ = op;
-        self.visit_expr(lhs);
-        self.visit_expr(rhs);
+    fn visit_assign(&mut self, assign: &AssignExpr) {
+        self.visit_expr(&assign.lhs);
+        self.visit_expr(&assign.rhs);
     }
 
-    fn visit_unary(&mut self, op: UnOp, expr: &ExprAst) {
-        let _ = op;
-        self.visit_expr(expr);
+    fn visit_unary(&mut self, unary: &UnaryExpr) {
+        self.visit_expr(&unary.expr);
     }
 
-    fn visit_binary(&mut self, op: BinOp, lhs: &ExprAst, rhs: &ExprAst) {
-        let _ = op;
-        self.visit_expr(lhs);
-        self.visit_expr(rhs);
+    fn visit_binary(&mut self, binary: &BinaryExpr) {
+        self.visit_expr(&binary.lhs);
+        self.visit_expr(&binary.rhs);
     }
 
-    fn visit_offset(&mut self, base: &ExprAst, offset: &ExprAst) {
-        self.visit_expr(base);
-        self.visit_expr(offset);
+    fn visit_offset(&mut self, offset: &OffsetExpr) {
+        self.visit_expr(&offset.base);
+        self.visit_expr(&offset.offset);
     }
 
-    fn visit_ternary(&mut self, cond: &ExprAst, then_expr: &ExprAst, else_expr: &ExprAst) {
-        self.visit_expr(cond);
-        self.visit_expr(then_expr);
-        self.visit_expr(else_expr);
+    fn visit_ternary(&mut self, ternary: &TernaryExpr) {
+        self.visit_expr(&ternary.cond);
+        self.visit_expr(&ternary.then_expr);
+        self.visit_expr(&ternary.else_expr);
     }
 
-    fn visit_call(&mut self, callee: &ExprAst, args: &[Node<ExprAst>]) {
-        self.visit_expr(callee);
-        for arg in args {
+    fn visit_call(&mut self, call: &CallExpr) {
+        self.visit_expr(&call.callee);
+        for arg in &call.args {
             self.visit_expr(arg);
         }
     }

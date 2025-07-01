@@ -1,10 +1,7 @@
 use std::fmt;
 use std::rc::Rc;
 
-use crate::ast::{
-    AssignOp, AutoDecl, BinOp, DefAst, DefKind, ExprAst, ImmVal, Literal, Name, Node, StmtAst,
-    UnOp, UnOpKind, VectorSize,
-};
+use crate::ast::*;
 use crate::diagnostics::{Diagnostics, Span};
 use crate::lexer::token::{BinOpKind, Kw};
 use crate::lexer::{Lexer, Token, TokenKind};
@@ -52,31 +49,39 @@ impl<'s> Parser<'s> {
     }
 
     pub fn parse_def_function(&mut self, name: Name) -> Option<DefAst> {
-        self.eat(TokenKind::OParen);
-        let params = self.parse_any_comma(|p| p.parse_name(), TokenKind::CParen)?;
+        let open_span = self.eat(TokenKind::OParen).span;
+        let (params, close_tok) = self.parse_any_comma(|p| p.parse_name(), TokenKind::CParen)?;
         let body = self.parse_stmt()?;
-        Some(DefAst {
+        Some(DefAst::new(
             name,
-            kind: DefKind::Function { params, body },
-        })
+            DefKind::Function {
+                params: FuncParams {
+                    params,
+                    open_span,
+                    close_span: close_tok.span,
+                },
+                body,
+            },
+        ))
     }
 
     pub fn parse_def_vector(&mut self, name: Name) -> Option<DefAst> {
         let size = match self.try_consume(TokenKind::OBrack) {
             Ok(_) => {
                 let size = self.try_parse_const();
-                self.consume(TokenKind::CBrack)?;
-                size.map(VectorSize::Def).unwrap_or(VectorSize::Zero)
+                let close_span = self.consume(TokenKind::CBrack)?.span;
+                size.map(|sz| VecSize::Def {
+                    lit: sz,
+                    span: close_span,
+                })
+                .unwrap_or(VecSize::Empty(close_span))
             }
-            Err(_) => VectorSize::Undef,
+            Err(_) => VecSize::Undef,
         };
 
-        let list = self.parse_any_comma(|p| p.parse_imm_val(), TokenKind::Semi)?;
+        let (list, _) = self.parse_any_comma(|p| p.parse_imm_val(), TokenKind::Semi)?;
 
-        Some(DefAst {
-            name,
-            kind: DefKind::Vector { size, list },
-        })
+        Some(DefAst::new(name, DefKind::Vector { size, list }))
     }
 
     pub fn parse_stmt(&mut self) -> Option<Node<StmtAst>> {
@@ -105,27 +110,40 @@ impl<'s> Parser<'s> {
     }
 
     pub fn parse_stmt_auto(&mut self) -> Option<StmtAst> {
-        self.eat(TokenKind::Keyword(Kw::Auto));
-        let list = self.parse_one_or_more_comma(|p| p.parse_auto_decl(), TokenKind::Semi)?;
-        Some(StmtAst::Auto(list))
+        let auto_span = self.eat(TokenKind::Keyword(Kw::Auto)).span;
+        let (decls, semi) =
+            self.parse_one_or_more_comma(|p| p.parse_auto_decl(), TokenKind::Semi)?;
+        Some(StmtAst::new(StmtKind::Auto(AutoStmt {
+            decls,
+            auto_span,
+            semi_span: semi.span,
+        })))
     }
 
     pub fn parse_stmt_extrn(&mut self) -> Option<StmtAst> {
-        self.eat(TokenKind::Keyword(Kw::Extrn));
-        let list = self.parse_one_or_more_comma(|p| p.parse_name(), TokenKind::Semi)?;
-        Some(StmtAst::Extrn(list))
+        let extrn_span = self.eat(TokenKind::Keyword(Kw::Extrn)).span;
+        let (names, semi) = self.parse_one_or_more_comma(|p| p.parse_name(), TokenKind::Semi)?;
+        Some(StmtAst::new(StmtKind::Extrn(ExtrnStmt {
+            names,
+            extrn_span,
+            semi_span: semi.span,
+        })))
     }
 
     pub fn parse_stmt_case(&mut self) -> Option<StmtAst> {
-        self.eat(TokenKind::Keyword(Kw::Case));
+        let case_span = self.eat(TokenKind::Keyword(Kw::Case)).span;
         let cnst = self.parse_const()?;
         self.consume(TokenKind::Colon)?;
         let stmt = self.parse_stmt()?;
-        Some(StmtAst::Case { cnst, stmt })
+        Some(StmtAst::new(StmtKind::Case(CaseStmt {
+            cnst,
+            stmt,
+            case_span,
+        })))
     }
 
     pub fn parse_stmt_cond(&mut self) -> Option<StmtAst> {
-        self.eat(TokenKind::Keyword(Kw::If));
+        let if_span = self.eat(TokenKind::Keyword(Kw::If)).span;
 
         self.consume(TokenKind::OParen)?;
         let cond = self.parse_expr()?;
@@ -137,40 +155,53 @@ impl<'s> Parser<'s> {
             Err(_) => None,
         };
 
-        Some(StmtAst::Cond {
+        Some(StmtAst::new(StmtKind::Cond(CondStmt {
             cond,
             then_stmt,
             else_stmt,
-        })
+            if_span,
+        })))
     }
 
     pub fn parse_stmt_while(&mut self) -> Option<StmtAst> {
-        self.eat(TokenKind::Keyword(Kw::While));
+        let while_span = self.eat(TokenKind::Keyword(Kw::While)).span;
 
         self.consume(TokenKind::OParen)?;
         let cond = self.parse_expr()?;
         self.consume(TokenKind::CParen)?;
 
         let stmt = self.parse_stmt()?;
-        Some(StmtAst::While { cond, stmt })
+        Some(StmtAst::new(StmtKind::While(WhileStmt {
+            cond,
+            stmt,
+            while_span,
+        })))
     }
 
     pub fn parse_stmt_switch(&mut self) -> Option<StmtAst> {
-        self.eat(TokenKind::Keyword(Kw::Switch));
+        let switch_span = self.eat(TokenKind::Keyword(Kw::Switch)).span;
         let cond = self.parse_expr()?;
         let stmt = self.parse_stmt()?;
-        Some(StmtAst::Switch { cond, stmt })
+        Some(StmtAst::new(StmtKind::Switch(SwitchStmt {
+            cond,
+            stmt,
+            switch_span,
+        })))
     }
 
     pub fn parse_stmt_goto(&mut self) -> Option<StmtAst> {
-        self.eat(TokenKind::Keyword(Kw::Goto));
-        let name = self.parse_name()?;
-        self.consume(TokenKind::Semi)?;
-        Some(StmtAst::Goto(name))
+        let goto_span = self.eat(TokenKind::Keyword(Kw::Goto)).span;
+        let label = self.parse_name()?;
+        let semi_span = self.consume(TokenKind::Semi)?.span;
+        Some(StmtAst::new(StmtKind::Goto(GotoStmt {
+            label,
+            goto_span,
+            semi_span,
+        })))
     }
 
     pub fn parse_stmt_return(&mut self) -> Option<StmtAst> {
-        self.eat(TokenKind::Keyword(Kw::Return));
+        let return_span = self.eat(TokenKind::Keyword(Kw::Return)).span;
 
         let expr = match self.try_consume(TokenKind::OParen) {
             Ok(_) => {
@@ -180,39 +211,47 @@ impl<'s> Parser<'s> {
             }
             Err(_) => None,
         };
-        self.consume(TokenKind::Semi)?;
-        Some(StmtAst::Return(expr))
+        let semi_span = self.consume(TokenKind::Semi)?.span;
+        Some(StmtAst::new(StmtKind::Return(ReturnStmt {
+            expr,
+            return_span,
+            semi_span,
+        })))
     }
 
     pub fn parse_stmt_label(&mut self, name: Name) -> Option<StmtAst> {
         self.eat(TokenKind::dummy_name());
         self.eat(TokenKind::Colon);
         let stmt = self.parse_stmt()?;
-        Some(StmtAst::Label { name, stmt })
+        Some(StmtAst::new(StmtKind::Label(LabelStmt { name, stmt })))
     }
 
     pub fn parse_stmt_block(&mut self) -> Option<StmtAst> {
-        self.eat(TokenKind::OBrace);
+        let open_span = self.eat(TokenKind::OBrace).span;
 
         let mut stmts = Vec::new();
         while self.peek().kind != TokenKind::CBrace {
             stmts.push(self.parse_stmt()?);
         }
-        self.eat(TokenKind::CBrace);
+        let close_span = self.eat(TokenKind::CBrace).span;
 
-        Some(StmtAst::Block(stmts))
+        Some(StmtAst::new(StmtKind::Block(BlockStmt {
+            stmts,
+            open_span,
+            close_span,
+        })))
     }
 
     pub fn parse_stmt_semi(&mut self) -> Option<StmtAst> {
-        let expr = match self.try_consume(TokenKind::Semi) {
-            Ok(_) => None,
-            Err(_) => {
+        let (expr, semi_span) = match self.try_consume(TokenKind::Semi) {
+            Ok(token) => (None, token.span),
+            Err(token) => {
                 let expr = self.parse_expr()?;
                 self.consume(TokenKind::Semi)?;
-                Some(expr)
+                (Some(expr), token.span)
             }
         };
-        Some(StmtAst::Semi(expr))
+        Some(StmtAst::new(StmtKind::Semi(SemiStmt { expr, semi_span })))
     }
 
     pub fn parse_expr(&mut self) -> Option<Node<ExprAst>> {
@@ -245,7 +284,11 @@ impl<'s> Parser<'s> {
             span: op_token.span,
         };
         let rhs = self.parse_expr_assign()?;
-        Some(Node::expr(ExprAst::Assign { op, lhs, rhs }))
+        Some(Node::expr(ExprAst::new(ExprKind::Assign(AssignExpr {
+            op,
+            lhs,
+            rhs,
+        }))))
     }
 
     #[inline]
@@ -297,11 +340,11 @@ impl<'s> Parser<'s> {
                     span: op_token.span,
                 };
                 let rhs = self.parse_expr_binary(rbp)?;
-                lhs = ExprAst::Binary {
+                lhs = ExprAst::new(ExprKind::Binary(BinaryExpr {
                     op,
                     lhs: Node::expr(lhs),
                     rhs,
-                };
+                }));
             } else {
                 let (lbp, rbp) = (3, 2);
                 if lbp < min_bp {
@@ -313,11 +356,11 @@ impl<'s> Parser<'s> {
                 let then_expr = self.parse_expr_binary(0)?;
                 self.consume(TokenKind::Colon)?;
                 let else_expr = self.parse_expr_binary(rbp)?;
-                lhs = ExprAst::Ternary {
+                lhs = ExprAst::new(ExprKind::Ternary(TernaryExpr {
                     cond: Node::expr(lhs),
                     then_expr,
                     else_expr,
-                }
+                }));
             };
         }
 
@@ -325,10 +368,14 @@ impl<'s> Parser<'s> {
     }
 
     pub fn parse_expr_group(&mut self) -> Option<ExprAst> {
-        self.eat(TokenKind::OParen);
+        let open_span = self.eat(TokenKind::OParen).span;
         let expr = self.parse_expr()?;
-        self.consume(TokenKind::CParen)?;
-        Some(ExprAst::Group(expr))
+        let close_span = self.consume(TokenKind::CParen)?.span;
+        Some(ExprAst::new(ExprKind::Group(GroupExpr {
+            expr,
+            open_span,
+            close_span,
+        })))
     }
 
     pub fn parse_expr_unary(&mut self) -> Option<ExprAst> {
@@ -349,10 +396,10 @@ impl<'s> Parser<'s> {
             span: op_token.span,
         };
         let expr = self.parse_expr_primary()?;
-        Some(ExprAst::Unary {
+        Some(ExprAst::new(ExprKind::Unary(UnaryExpr {
             op,
             expr: Node::expr(expr),
-        })
+        })))
     }
 
     pub fn parse_expr_primary(&mut self) -> Option<ExprAst> {
@@ -360,11 +407,11 @@ impl<'s> Parser<'s> {
         let expr = match token.kind {
             TokenKind::Name(name) => {
                 self.next();
-                ExprAst::Name(Name::new(name, token.span))
+                ExprAst::new(ExprKind::Name(Name::new(name, token.span)))
             }
             TokenKind::Literal(lit) => {
                 self.next();
-                ExprAst::Const(Literal::new(lit, token.span))
+                ExprAst::new(ExprKind::Const(Literal::new(lit, token.span)))
             }
             TokenKind::OParen => self.parse_expr_group()?,
             _ => self.parse_expr_unary()?,
@@ -379,40 +426,43 @@ impl<'s> Parser<'s> {
             match op_token.kind {
                 TokenKind::OParen => {
                     self.next();
-                    let args = self.parse_any_comma(|p| p.parse_expr(), TokenKind::CParen)?;
-                    expr = ExprAst::Call {
+                    let (args, close) =
+                        self.parse_any_comma(|p| p.parse_expr(), TokenKind::CParen)?;
+                    expr = ExprAst::new(ExprKind::Call(CallExpr {
                         callee: Node::expr(expr),
                         args,
-                    };
+                        close_span: close.span,
+                    }));
                 }
                 TokenKind::OBrack => {
                     self.next();
                     let offset = self.parse_expr()?;
-                    self.consume(TokenKind::CBrack)?;
-                    expr = ExprAst::Offset {
+                    let close_span = self.consume(TokenKind::CBrack)?.span;
+                    expr = ExprAst::new(ExprKind::Offset(OffsetExpr {
                         base: Node::expr(expr),
                         offset,
-                    };
+                        close_span,
+                    }));
                 }
                 TokenKind::PlusPlus => {
                     let op_span = self.next().span;
-                    expr = ExprAst::Unary {
+                    expr = ExprAst::new(ExprKind::Unary(UnaryExpr {
                         op: UnOp {
                             kind: UnOpKind::PostInc,
                             span: op_span,
                         },
                         expr: Node::expr(expr),
-                    };
+                    }));
                 }
                 TokenKind::MinusMinus => {
                     let op_span = self.next().span;
-                    expr = ExprAst::Unary {
+                    expr = ExprAst::new(ExprKind::Unary(UnaryExpr {
                         op: UnOp {
                             kind: UnOpKind::PostDec,
                             span: op_span,
                         },
                         expr: Node::expr(expr),
-                    };
+                    }));
                 }
                 _ => return Some(expr),
             }
@@ -424,14 +474,18 @@ impl<'s> Parser<'s> {
         &mut self,
         parse_arg: impl Fn(&mut Parser) -> Option<T>,
         terminator: TokenKind,
-    ) -> Option<Vec<T>> {
+    ) -> Option<(Vec<T>, Token)> {
         let mut list = Vec::new();
         list.push(parse_arg(self)?);
-        while self.consume_any(&[terminator, TokenKind::Comma])?.kind != terminator {
+        let term_token = loop {
+            let token = self.consume_any(&[terminator, TokenKind::Comma])?;
+            if token.kind == terminator {
+                break token;
+            }
             list.push(parse_arg(self)?);
-        }
+        };
 
-        Some(list)
+        Some((list, term_token))
     }
 
     #[inline]
@@ -439,21 +493,21 @@ impl<'s> Parser<'s> {
         &mut self,
         parse_arg: impl Fn(&mut Parser) -> Option<T>,
         terminator: TokenKind,
-    ) -> Option<Vec<T>> {
+    ) -> Option<(Vec<T>, Token)> {
         if self.peek().kind == terminator {
-            self.next();
-            return Some(vec![]);
+            return Some((vec![], self.next()));
         }
 
         let mut list = Vec::new();
-        loop {
+        let term_token = loop {
             list.push(parse_arg(self)?);
-            if self.consume_any(&[terminator, TokenKind::Comma])?.kind == terminator {
-                break;
+            let token = self.consume_any(&[terminator, TokenKind::Comma])?;
+            if token.kind == terminator {
+                break token;
             }
-        }
+        };
 
-        Some(list)
+        Some((list, term_token))
     }
 
     #[inline]
@@ -592,10 +646,8 @@ impl Parser<'_> {
     /// Tries to consume next token
     /// Does not report error
     #[inline]
-    fn try_consume(&mut self, expected: TokenKind) -> Result<(), Token> {
-        self.check(expected).inspect(|_| {
-            self.next();
-        })
+    fn try_consume(&mut self, expected: TokenKind) -> Result<Token, Token> {
+        self.check(expected).map(|_| self.next())
     }
 
     #[inline]
@@ -608,7 +660,7 @@ impl Parser<'_> {
     /// Consume the next token if kind is 'expected'
     /// Reports an error on failure
     #[inline]
-    fn consume(&mut self, expected: TokenKind) -> Option<()> {
+    fn consume(&mut self, expected: TokenKind) -> Option<Token> {
         self.try_consume(expected)
             .map_err(|found| self.error_unexpected(found.span, expected, found.kind))
             .ok()
@@ -622,9 +674,10 @@ impl Parser<'_> {
     }
 
     // This method is identical to `next` except it checks in debug mode
-    fn eat(&mut self, expected: TokenKind) {
+    fn eat(&mut self, expected: TokenKind) -> Token {
         let token = self.next();
         debug_assert!(token.kind.matches(&expected));
+        token
     }
 
     #[inline]

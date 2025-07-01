@@ -145,12 +145,16 @@ impl ariadne::Cache<Path> for &SourceMap {
 
 impl Span {
     pub fn new(start: u32, end: u32) -> Self {
-        assert!(start <= end);
+        debug_assert!(start <= end);
         Self { start, end }
     }
 
     pub fn empty() -> Self {
         Self::new(0, 0)
+    }
+
+    pub fn unite(self, other: Span) -> Self {
+        Span::new(self.start.min(other.start), other.end.max(self.end))
     }
 }
 
