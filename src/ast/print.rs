@@ -128,7 +128,7 @@ impl StmtVisitor for PrettyPrinter {
         self.output.push(b')');
     }
 
-    fn visit_case(&mut self, case: &CaseStmt) {
+    fn visit_case(&mut self, case: &CaseStmt, _span: Span) {
         self.output.push_str("(case ");
         self.visit_const(&case.cnst);
         self.visit_stmt(&case.stmt);

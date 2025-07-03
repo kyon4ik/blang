@@ -21,7 +21,7 @@ pub trait StmtVisitor: ExprVisitor {
         self.visit_stmt(&label.stmt);
     }
 
-    fn visit_case(&mut self, case: &CaseStmt) {
+    fn visit_case(&mut self, case: &CaseStmt, _span: Span) {
         self.visit_stmt(&case.stmt);
     }
 
@@ -55,7 +55,7 @@ pub trait StmtVisitor: ExprVisitor {
             StmtKind::Cond(cond_stmt) => self.visit_cond(cond_stmt),
             StmtKind::While(while_stmt) => self.visit_while(while_stmt),
             StmtKind::Switch(switch_stmt) => self.visit_switch(switch_stmt),
-            StmtKind::Case(case_stmt) => self.visit_case(case_stmt),
+            StmtKind::Case(case_stmt) => self.visit_case(case_stmt, stmt.span),
             StmtKind::Goto(goto_stmt) => self.visit_goto(goto_stmt),
             StmtKind::Return(return_stmt) => self.visit_return(return_stmt),
             StmtKind::Semi(semi_stmt) => self.visit_semi(semi_stmt),

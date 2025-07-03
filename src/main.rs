@@ -5,11 +5,11 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use blang::ast::print::PrettyPrinter;
-use blang::ast::resolve::{NameResolver, ValueChecker};
+use blang::ast::resolve::NameResolver;
+use blang::codegen::Module;
 use blang::diagnostics::{DiagConfig, Diagnostics, SourceMap};
-// use blang::ir::CraneliftBackend;
 use blang::parser::Parser;
-use clap::Parser as _;
+use clap::{Parser as _, ValueEnum};
 
 #[derive(clap::Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -18,9 +18,21 @@ struct Args {
     /// Enable optimisations
     #[arg(short = 'O')]
     optimize: bool,
+    /// Print specified info to stdout
+    #[arg(long, value_enum, default_value_os_t)]
+    print: PrintInfo,
     /// Maximal number of errors
-    #[arg(long, default_value_t = 3)]
+    #[arg(long, default_value_t = 5)]
     max_errors: u8,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, ValueEnum)]
+#[value(rename_all = "lower")]
+enum PrintInfo {
+    #[default]
+    None,
+    Ast,
+    Ir,
 }
 
 fn main() {
@@ -40,29 +52,39 @@ fn main() {
     let mut parser = Parser::new(&src, diag.clone());
     let defs = parser.parse_program();
     let mut resolver = NameResolver::new(diag.clone());
-    let mut checker = ValueChecker::new(diag.clone());
-    // let mut ir = CraneliftBackend::new("x86_64", args.optimize);
     for def in &defs {
         resolver.visit_def(def);
-        checker.visit_def(def);
-        // ir.visit_def(def);
     }
 
-    // let obj = ir.finish();
-    // let mut out_path = args.input.clone();
-    // out_path.set_extension("o");
-    // println!("Create object file: {}", out_path.display());
-    // let mut output = File::create(out_path).unwrap();
-    // output.write_all(&obj.emit().unwrap()).unwrap();
+    let mut module = Module::new(
+        "x86_64-unknown-linux-gnu",
+        &args.input,
+        args.optimize,
+        diag.clone(),
+    );
+    module.run_global_pass(&defs);
+    module.run_local_pass(&defs, args.print == PrintInfo::Ir);
 
     if diag.has_errors() {
         diag.print_errors().unwrap();
     } else {
-        let mut pp = PrettyPrinter::new();
-        for def in &defs {
-            pp.visit_def(def);
+        match args.print {
+            PrintInfo::None | PrintInfo::Ir => {}
+            PrintInfo::Ast => {
+                let mut pp = PrettyPrinter::new();
+                for def in &defs {
+                    pp.visit_def(def);
+                }
+                println!("{}", pp.display());
+            }
         }
-        println!("{}", pp.display());
+
+        let obj = module.finish();
+        let mut out_path = args.input.clone();
+        out_path.set_extension("o");
+        println!("Create object file: {}", out_path.display());
+        let mut output = File::create(out_path).unwrap();
+        output.write_all(&obj.emit().unwrap()).unwrap();
     }
 }
 

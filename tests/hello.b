@@ -1,5 +1,5 @@
 main() {
-    extrn putchar, hello;
+    extrn hello;
     hello();
     hello();
     hello();

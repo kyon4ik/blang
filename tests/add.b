@@ -1,5 +1,7 @@
 add(a, b) {
-	auto c;
-	c = a + b;
-	return;
+	return (a + b);
+}
+
+sub(a, b) {
+	return (a - b);
 }
