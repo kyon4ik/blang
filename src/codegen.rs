@@ -29,7 +29,8 @@ struct Function<'f> {
     builder: clf::FunctionBuilder<'f>,
     labels: FxHashMap<InternedStr, clir::Block>,
     autos: FxHashMap<InternedStr, AutoInfo>,
-    literals: FxHashMap<InternedStr, i64>,
+    numbers: FxHashMap<InternedStr, i64>,
+    strings: FxHashMap<InternedStr, clir::GlobalValue>,
     signatures: FxHashMap<usize, clir::SigRef>,
     word_type: clir::Type,
     return_block: clir::Block,
@@ -46,9 +47,9 @@ struct GlobalInfo {
 impl Module {
     pub fn new(target: &str, path: &Path, optimize: bool, diag: Rc<Diagnostics>) -> Self {
         let mut shared_builder = clb::settings::builder();
+        shared_builder.enable("is_pic").unwrap();
         if optimize {
             shared_builder.set("opt_level", "speed_and_size").unwrap();
-            shared_builder.enable("is_pic").unwrap();
         }
         let shared_flags = clb::settings::Flags::new(shared_builder);
         let isa = clb::isa::lookup_by_name(target)
@@ -220,7 +221,8 @@ impl<'f> Function<'f> {
             builder,
             labels: FxHashMap::default(),
             autos: FxHashMap::default(),
-            literals: FxHashMap::default(),
+            numbers: FxHashMap::default(),
+            strings: FxHashMap::default(),
             signatures: FxHashMap::default(),
             word_type: module.word_type,
             return_block: clir::Block::from_u32(0),
@@ -319,7 +321,7 @@ impl<'f> Function<'f> {
     }
 
     fn create_literal(&mut self, literal: &Literal) -> clir::Value {
-        if let Some(val) = self.literals.get(&literal.value) {
+        if let Some(val) = self.numbers.get(&literal.value) {
             self.builder.ins().iconst(self.word_type, *val)
         } else {
             // FIXME: implement custom parsing
@@ -388,7 +390,18 @@ impl<'f> Function<'f> {
                         clir::Value::from_u32(0)
                     }
                 }
-                LiteralKind::String => todo!(),
+                LiteralKind::String => {
+                    let gv = self.strings.entry(literal.value).or_insert_with(|| {
+                        let data_id = self.module.declare_anonymous_data(true, false).unwrap();
+                        let mut desc = clm::DataDescription::new();
+                        let mut data = literal.value.display().to_vec();
+                        data.push(b'\0');
+                        desc.define(data.into_boxed_slice());
+                        self.module.define_data(data_id, &desc).unwrap();
+                        self.module.declare_data_in_func(data_id, self.builder.func)
+                    });
+                    self.builder.ins().global_value(self.word_type, *gv)
+                }
             }
         }
     }
