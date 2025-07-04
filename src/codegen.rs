@@ -695,8 +695,17 @@ impl ExprVisitor for Function<'_> {
     }
 
     // NOTE: addr is bytes on modern systems, but in B it is words
-    fn visit_offset(&mut self, _offset: &OffsetExpr) -> Self::Value {
-        todo!()
+    fn visit_offset(&mut self, offset: &OffsetExpr) -> Self::Value {
+        let mut base = self.visit_expr(&offset.base)?;
+        let mut off_in_words = self.visit_expr(&offset.offset)?;
+        self.make_rvalue(&mut base);
+        self.make_rvalue(&mut off_in_words);
+
+        let off = self
+            .builder
+            .ins()
+            .imul_imm(off_in_words.inner, self.word_type.bytes() as i64);
+        Some(Value::lvalue(self.builder.ins().iadd(base.inner, off)))
     }
 
     fn visit_ternary(&mut self, ternary: &TernaryExpr) -> Self::Value {
