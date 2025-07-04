@@ -52,6 +52,7 @@ impl PrettyPrinter {
                 self.visit_stmt(body);
             }
         }
+        self.output.push(b'\n');
     }
 }
 

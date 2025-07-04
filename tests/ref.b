@@ -1,4 +1,3 @@
-
 test2() {
 	extrn printf;
 	auto a, b, c, d;

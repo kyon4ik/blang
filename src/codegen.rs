@@ -14,12 +14,19 @@ use cranelift::frontend as clf;
 use cranelift::module::{self as clm, Module as _};
 use cranelift::object as clo;
 use cranelift::prelude::InstBuilder;
+use cranelift::prelude::isa::OwnedTargetIsa;
 use rustc_hash::FxHashMap;
 
 pub struct Module {
-    module: clo::ObjectModule,
     ctx: clb::Context,
     func_ctx: clf::FunctionBuilderContext,
+    gen_ctx: Context,
+}
+
+struct Context {
+    numbers: FxHashMap<InternedStr, i64>,
+    strings: FxHashMap<InternedStr, clm::DataId>,
+    module: clo::ObjectModule,
     word_type: clir::Type,
     globals: FxHashMap<InternedStr, GlobalInfo>,
     diag: Rc<Diagnostics>,
@@ -29,19 +36,98 @@ struct Function<'f> {
     builder: clf::FunctionBuilder<'f>,
     labels: FxHashMap<InternedStr, clir::Block>,
     autos: FxHashMap<InternedStr, AutoInfo>,
-    numbers: FxHashMap<InternedStr, i64>,
-    strings: FxHashMap<InternedStr, clir::GlobalValue>,
     signatures: FxHashMap<usize, clir::SigRef>,
-    word_type: clir::Type,
     return_block: clir::Block,
-    globals: &'f FxHashMap<InternedStr, GlobalInfo>,
-    module: &'f mut clo::ObjectModule,
-    diag: &'f Diagnostics,
+    ctx: &'f mut Context,
 }
 
 struct GlobalInfo {
     id: clm::FuncOrDataId,
     span: Span,
+}
+
+impl Context {
+    pub fn new(isa: OwnedTargetIsa, path: &Path, diag: Rc<Diagnostics>) -> Self {
+        let word_type = isa.pointer_type();
+        let builder = clo::ObjectBuilder::new(
+            isa,
+            path.as_os_str().as_encoded_bytes(),
+            clm::default_libcall_names(),
+        )
+        .unwrap();
+        let module = clo::ObjectModule::new(builder);
+
+        Self {
+            numbers: FxHashMap::default(),
+            strings: FxHashMap::default(),
+            module,
+            word_type,
+            globals: FxHashMap::default(),
+            diag,
+        }
+    }
+
+    fn create_number(&mut self, value: InternedStr) -> i64 {
+        *self.numbers.entry(value).or_insert_with(|| {
+            // FIXME: implement custom parsing
+            let bytes = value.display();
+            debug_assert!(bytes.is_ascii());
+            // SAFETY: number only consists of digits, it maybe not true for other literals
+            let str = unsafe { bytes.to_str_unchecked() };
+            str.parse::<i64>().unwrap()
+        })
+    }
+
+    fn create_string(&mut self, value: InternedStr, span: Span) -> clm::DataId {
+        *self.strings.entry(value).or_insert_with(|| {
+            let data_id = self.module.declare_anonymous_data(true, false).unwrap();
+            let mut desc = clm::DataDescription::new();
+            let mut data = match unescape(value.display()) {
+                Ok(data) => data,
+                Err(place) => {
+                    let start = span.start + place as u32;
+                    self.diag
+                        .error(Span::new(start, start + 1), "unknown escape symbol")
+                        .finish();
+                    return clm::DataId::from_u32(0);
+                }
+            };
+            data.push(b'\0');
+            desc.define(data.into_boxed_slice());
+            self.module.define_data(data_id, &desc).unwrap();
+            data_id
+        })
+    }
+
+    fn create_char(&mut self, value: InternedStr, span: Span) -> u16 {
+        let bytes = value.display();
+        match bytes.len() {
+            0 => {
+                self.diag
+                    .error(span, "empty character is not supported")
+                    .finish();
+                0
+            }
+            1 => bytes[0] as u16,
+            2 => {
+                if bytes[0] != b'*' {
+                    (bytes[0] as u16) << u8::BITS | bytes[1] as u16
+                } else {
+                    let c = unescape_char(bytes[1]);
+                    if c.is_none() {
+                        self.diag.error(span, "unknown escape symbol").finish();
+                    }
+                    c.map(u16::from).unwrap_or(0)
+                }
+            }
+            _ => {
+                self.diag
+                    .error(span, "character constant is longer than 2 symbols")
+                    .finish();
+                0
+            }
+        }
+    }
 }
 
 impl Module {
@@ -57,24 +143,14 @@ impl Module {
             .finish(shared_flags)
             .unwrap();
 
-        let word_type = isa.pointer_type();
-        let builder = clo::ObjectBuilder::new(
-            isa,
-            path.as_os_str().as_encoded_bytes(),
-            clm::default_libcall_names(),
-        )
-        .unwrap();
-        let module = clo::ObjectModule::new(builder);
-        let ctx = module.make_context();
+        let gen_ctx = Context::new(isa, path, diag);
+        let ctx = gen_ctx.module.make_context();
         let func_ctx = clf::FunctionBuilderContext::new();
 
         Self {
-            module,
             func_ctx,
             ctx,
-            word_type,
-            globals: FxHashMap::default(),
-            diag,
+            gen_ctx,
         }
     }
 
@@ -90,36 +166,44 @@ impl Module {
         }
     }
 
+    fn module(&mut self) -> &mut clo::ObjectModule {
+        &mut self.gen_ctx.module
+    }
+
     fn run_global_pass_on(&mut self, def: &DefAst) {
         let global_name = def.name.value.display().to_str().unwrap();
         let id = match &def.kind {
             DefKind::Vector { .. } => {
                 let data_id = self
-                    .module
+                    .module()
                     .declare_data(global_name, clm::Linkage::Export, true, false)
                     .unwrap();
+
                 clm::FuncOrDataId::Data(data_id)
             }
             DefKind::Function { params, .. } => {
                 let params = &params.params;
-                let mut sig = self.module.make_signature();
+                let mut sig = self.module().make_signature();
                 sig.params.extend(std::iter::repeat_n(
-                    clir::AbiParam::new(self.word_type),
+                    clir::AbiParam::new(self.gen_ctx.word_type),
                     params.len(),
                 ));
-                sig.returns.push(clir::AbiParam::new(self.word_type));
+                sig.returns
+                    .push(clir::AbiParam::new(self.gen_ctx.word_type));
 
                 let func_id = self
-                    .module
+                    .module()
                     .declare_function(global_name, clm::Linkage::Export, &sig)
                     .unwrap();
                 clm::FuncOrDataId::Func(func_id)
             }
         };
-        self.globals
+        self.gen_ctx
+            .globals
             .entry(def.name.value)
             .and_modify(|global| {
-                self.diag
+                self.gen_ctx
+                    .diag
                     .error(
                         def.name.span,
                         format!("redefinition of global name {}", def.name.value.display()),
@@ -135,45 +219,110 @@ impl Module {
 
     fn run_local_pass_on(&mut self, def: &DefAst, print: bool) {
         let global = self
+            .gen_ctx
             .globals
             .get(&def.name.value)
             .expect("Run local pass to define globals");
         match &def.kind {
-            DefKind::Vector { .. } => {
-                todo!("Vector is not implemented")
-                // let data_id = match global.id {
-                //     clm::FuncOrDataId::Data(data_id) => data_id,
-                //     _ => panic!("Expected data id in globals table"),
-                // };
-                // let decl_size = match size {
-                //     VecSize::Undef => 1,
-                //     VecSize::Empty(_) => 0,
-                //     VecSize::Def { lit, .. } => {
-                //         let bytes = lit.value.display();
-                //         debug_assert!(bytes.is_ascii());
-                //         match lit.kind {
-                //             LiteralKind::Number => {
-                //                 // SAFETY: number only consists of digits, it maybe not true for other literals
-                //                 let str = unsafe { bytes.to_str_unchecked() };
-                //                 str.parse::<usize>().unwrap()
-                //             }
-                //             LiteralKind::Char => todo!(),
-                //             LiteralKind::String => todo!(),
-                //         }
-                //     }
-                // };
-                // let desc = clm::DataDescription {
-                //     init: clm::Init::Zeros {
-                //         size: decl_size.max(list.len()) * self.word_type.bytes() as usize,
-                //     },
-                //     function_decls: todo!(),
-                //     data_decls: todo!(),
-                //     function_relocs: todo!(),
-                //     data_relocs: todo!(),
-                //     custom_segment_section: todo!(),
-                //     align: todo!(),
-                // };
-                // self.module.define_data(data_id, &desc).unwrap();
+            DefKind::Vector { list, size } => {
+                let data_id = match global.id {
+                    clm::FuncOrDataId::Data(data_id) => data_id,
+                    _ => panic!("Expected data id in globals table"),
+                };
+
+                let size = match size {
+                    VecSize::Undef => 1,
+                    VecSize::Empty(_) => 0,
+                    VecSize::Def { lit, .. } => match lit.kind {
+                        LiteralKind::Number => self.gen_ctx.create_number(lit.value) as usize,
+                        _ => {
+                            self.gen_ctx
+                                .diag
+                                .error(lit.span, "vector size must be integer")
+                                .finish();
+                            0
+                        }
+                    },
+                };
+                let size = size.max(list.len());
+
+                let mut data = clm::DataDescription::new();
+                if list.is_empty() {
+                    data.define_zeroinit(size);
+                } else {
+                    let mut bytes = Vec::new();
+                    for ival in list {
+                        match ival {
+                            ImmVal::Const(lit) => match lit.kind {
+                                LiteralKind::Number => {
+                                    let num = self.gen_ctx.create_number(lit.value);
+
+                                    bytes.extend_from_slice(&match self
+                                        .gen_ctx
+                                        .module
+                                        .isa()
+                                        .endianness()
+                                    {
+                                        clir::Endianness::Little => num.to_le_bytes(),
+                                        clir::Endianness::Big => num.to_be_bytes(),
+                                    });
+                                }
+                                LiteralKind::Char => {
+                                    let char = self.gen_ctx.create_char(lit.value, lit.span) as i64;
+
+                                    bytes.extend_from_slice(&match self
+                                        .gen_ctx
+                                        .module
+                                        .isa()
+                                        .endianness()
+                                    {
+                                        clir::Endianness::Little => char.to_le_bytes(),
+                                        clir::Endianness::Big => char.to_be_bytes(),
+                                    });
+                                }
+                                LiteralKind::String => {
+                                    let data_id = self.gen_ctx.create_string(lit.value, lit.span);
+                                    let gv = self.module().declare_data_in_data(data_id, &mut data);
+                                    data.write_data_addr(bytes.len() as u32, gv, 0);
+                                    bytes.extend(std::iter::repeat_n(
+                                        0,
+                                        self.gen_ctx.word_type.bytes() as usize,
+                                    ));
+                                }
+                            },
+                            ImmVal::Name(name) => {
+                                if let Some(func_or_data) = self.gen_ctx.globals.get(&name.value) {
+                                    match func_or_data.id {
+                                        clm::FuncOrDataId::Func(func_id) => {
+                                            let func_ref = self
+                                                .module()
+                                                .declare_func_in_data(func_id, &mut data);
+                                            data.write_function_addr(bytes.len() as u32, func_ref);
+                                        }
+                                        clm::FuncOrDataId::Data(data_id) => {
+                                            let gv = self
+                                                .module()
+                                                .declare_data_in_data(data_id, &mut data);
+                                            data.write_data_addr(bytes.len() as u32, gv, 0);
+                                        }
+                                    }
+                                    bytes.extend(std::iter::repeat_n(
+                                        0,
+                                        self.gen_ctx.word_type.bytes() as usize,
+                                    ));
+                                } else {
+                                    self.gen_ctx
+                                        .diag
+                                        .error(name.span, "undefined global name")
+                                        .finish();
+                                }
+                            }
+                        }
+                    }
+                    data.define(bytes.into_boxed_slice());
+                };
+
+                self.module().define_data(data_id, &data).unwrap();
             }
             DefKind::Function { params, body } => {
                 let func_id = match global.id {
@@ -184,7 +333,7 @@ impl Module {
                 self.ctx.func.name =
                     clir::UserFuncName::User(clir::UserExternalName::new(0, func_id.as_u32()));
                 self.ctx.func.signature = self
-                    .module
+                    .module()
                     .declarations()
                     .get_function_decl(func_id)
                     .signature
@@ -193,23 +342,26 @@ impl Module {
                 let cfunc = Function::new(self);
                 cfunc.build(params, body);
 
-                if self.diag.has_errors() {
+                if self.gen_ctx.diag.has_errors() {
                     self.func_ctx = clf::FunctionBuilderContext::new();
                     return;
                 }
 
-                clb::verify_function(&self.ctx.func, self.module.isa().flags()).unwrap();
                 if print {
                     println!("{}", self.ctx.func.display());
                 }
+                clb::verify_function(&self.ctx.func, self.gen_ctx.module.isa().flags()).unwrap();
 
-                self.module.define_function(func_id, &mut self.ctx).unwrap();
+                self.gen_ctx
+                    .module
+                    .define_function(func_id, &mut self.ctx)
+                    .unwrap();
             }
         }
     }
 
     pub fn finish(self) -> clo::ObjectProduct {
-        self.module.finish()
+        self.gen_ctx.module.finish()
     }
 }
 
@@ -221,14 +373,9 @@ impl<'f> Function<'f> {
             builder,
             labels: FxHashMap::default(),
             autos: FxHashMap::default(),
-            numbers: FxHashMap::default(),
-            strings: FxHashMap::default(),
             signatures: FxHashMap::default(),
-            word_type: module.word_type,
             return_block: clir::Block::from_u32(0),
-            globals: &module.globals,
-            module: &mut module.module,
-            diag: &module.diag,
+            ctx: &mut module.gen_ctx,
         }
     }
 
@@ -248,13 +395,13 @@ impl<'f> Function<'f> {
 
         self.visit_stmt(body);
 
-        if self.diag.has_errors() {
+        if self.ctx.diag.has_errors() {
             return;
         }
 
         if let Some(block) = self.builder.current_block() {
             if self.builder.func.block_successors(block).next().is_none() {
-                let zero = self.builder.ins().iconst(self.word_type, 0);
+                let zero = self.builder.ins().iconst(self.ctx.word_type, 0);
                 self.builder
                     .ins()
                     .jump(self.return_block, &[clir::BlockArg::Value(zero)]);
@@ -272,11 +419,12 @@ impl<'f> Function<'f> {
         self.builder.finalize();
     }
 
-    fn declare_auto(&mut self, name: &Name, value: clir::Value, is_global: bool) {
+    fn declare_auto(&mut self, name: &Name, value: clir::Value, is_rvalue: bool) {
         self.autos
             .entry(name.value)
             .and_modify(|info| {
-                self.diag
+                self.ctx
+                    .diag
                     .error(
                         name.span,
                         format!("redefinition of name {}", name.value.display()),
@@ -286,22 +434,22 @@ impl<'f> Function<'f> {
             })
             .or_insert(AutoInfo {
                 value,
-                is_global,
+                is_rvalue,
                 span: name.span,
             });
     }
 
     // TODO: alloc with constant
-    fn create_auto(&mut self, name: &Name) {
+    fn create_auto(&mut self, name: &Name, size: u32) {
         let slot = self
             .builder
             .create_sized_stack_slot(clir::StackSlotData::new(
                 clir::StackSlotKind::ExplicitSlot,
-                self.word_type.bytes(),
-                self.word_type.bytes().ilog2() as u8,
+                self.ctx.word_type.bytes() * size,
+                self.ctx.word_type.bytes().ilog2() as u8,
             ));
 
-        let addr = self.builder.ins().stack_addr(self.word_type, slot, 0);
+        let addr = self.builder.ins().stack_addr(self.ctx.word_type, slot, 0);
         self.declare_auto(name, addr, false);
     }
 
@@ -310,96 +458,45 @@ impl<'f> Function<'f> {
             .builder
             .create_sized_stack_slot(clir::StackSlotData::new(
                 clir::StackSlotKind::ExplicitSlot,
-                self.word_type.bytes(),
-                self.word_type.bytes().ilog2() as u8,
+                self.ctx.word_type.bytes(),
+                self.ctx.word_type.bytes().ilog2() as u8,
             ));
 
         self.builder.ins().stack_store(value, slot, 0);
 
-        let addr = self.builder.ins().stack_addr(self.word_type, slot, 0);
+        let addr = self.builder.ins().stack_addr(self.ctx.word_type, slot, 0);
         self.declare_auto(name, addr, false);
     }
 
     fn create_literal(&mut self, literal: &Literal) -> clir::Value {
-        if let Some(val) = self.numbers.get(&literal.value) {
-            self.builder.ins().iconst(self.word_type, *val)
-        } else {
-            // FIXME: implement custom parsing
-            let bytes = literal.value.display();
-            debug_assert!(bytes.is_ascii());
-            match literal.kind {
-                LiteralKind::Number => {
-                    // SAFETY: number only consists of digits, it maybe not true for other literals
-                    let str = unsafe { bytes.to_str_unchecked() };
-                    let num = str.parse::<i64>().unwrap();
-                    self.builder.ins().iconst(self.word_type, num)
-                }
-                LiteralKind::Char => {
-                    let char = match bytes.len() {
-                        0 => {
-                            self.diag
-                                .error(literal.span, "empty character is not supported")
-                                .finish();
-                            None
-                        }
-                        1 => Some(bytes[0] as u16),
-                        2 => {
-                            if bytes[0] != b'*' {
-                                Some((bytes[0] as u16) << u8::BITS | bytes[1] as u16)
-                            } else {
-                                let c = unescape_char(bytes[1]);
-                                if c.is_none() {
-                                    self.diag
-                                        .error(literal.span, "unknown escape symbol")
-                                        .finish();
-                                }
-                                c.map(u16::from)
-                            }
-                        }
-                        _ => {
-                            self.diag
-                                .error(literal.span, "character constant is longer than 2 symbols")
-                                .finish();
-                            None
-                        }
-                    };
-                    if let Some(c) = char {
-                        self.builder.ins().iconst(self.word_type, c as i64)
-                    } else {
-                        clir::Value::from_u32(0)
-                    }
-                }
-                LiteralKind::String => {
-                    let gv = self.strings.entry(literal.value).or_insert_with(|| {
-                        let data_id = self.module.declare_anonymous_data(true, false).unwrap();
-                        let mut desc = clm::DataDescription::new();
-                        let mut data = match unescape(literal.value.display()) {
-                            Ok(data) => data,
-                            Err(place) => {
-                                let start = literal.span.start + place as u32;
-                                self.diag
-                                    .error(Span::new(start, start + 1), "unknown escape symbol")
-                                    .finish();
-                                return clir::GlobalValue::from_u32(0);
-                            }
-                        };
-                        data.push(b'\0');
-                        desc.define(data.into_boxed_slice());
-                        self.module.define_data(data_id, &desc).unwrap();
-                        self.module.declare_data_in_func(data_id, self.builder.func)
-                    });
-                    self.builder.ins().global_value(self.word_type, *gv)
-                }
+        match literal.kind {
+            LiteralKind::Number => {
+                let num = self.ctx.create_number(literal.value);
+                self.builder.ins().iconst(self.ctx.word_type, num)
+            }
+            LiteralKind::Char => {
+                let char = self.ctx.create_char(literal.value, literal.span) as i64;
+                self.builder.ins().iconst(self.ctx.word_type, char)
+            }
+            LiteralKind::String => {
+                let data_id = self.ctx.create_string(literal.value, literal.span);
+                let gv = self
+                    .ctx
+                    .module
+                    .declare_data_in_func(data_id, self.builder.func);
+                self.builder.ins().global_value(self.ctx.word_type, gv)
             }
         }
     }
 
     fn make_rvalue(&mut self, value: &mut Value) {
         if value.is_lvalue {
-            value.inner =
-                self.builder
-                    .ins()
-                    .load(self.word_type, clir::MemFlags::trusted(), value.inner, 0);
+            value.inner = self.builder.ins().load(
+                self.ctx.word_type,
+                clir::MemFlags::trusted(),
+                value.inner,
+                0,
+            );
             value.is_lvalue = false;
         }
     }
@@ -423,7 +520,7 @@ impl<'f> Function<'f> {
         let a = self
             .builder
             .ins()
-            .load(self.word_type, clir::MemFlags::trusted(), x.inner, 0);
+            .load(self.ctx.word_type, clir::MemFlags::trusted(), x.inner, 0);
         let b = self.builder.ins().iadd_imm(a, imm);
         self.builder
             .ins()
@@ -432,13 +529,20 @@ impl<'f> Function<'f> {
     }
 
     fn expected_lvalue(&self, unary: &UnaryExpr) {
-        self.diag
+        self.ctx
+            .diag
             .error(
                 unary.op.span,
                 format!("'{}' expects lvalue as operand", unary.op.kind),
             )
             .add_label(unary.expr.span, "found rvalue")
             .finish();
+    }
+
+    #[inline]
+    fn build_cmp(&mut self, cmp: ICmp, lhs: clir::Value, rhs: clir::Value) -> clir::Value {
+        let bool = self.builder.ins().icmp(cmp, lhs, rhs);
+        self.builder.ins().uextend(self.ctx.word_type, bool)
     }
 
     fn apply_binary(
@@ -451,12 +555,12 @@ impl<'f> Function<'f> {
         match binop {
             BinOpKind::Or => ins.bor(lhs, rhs),
             BinOpKind::And => ins.band(lhs, rhs),
-            BinOpKind::Eq => ins.icmp(ICmp::Eq, lhs, rhs),
-            BinOpKind::Neq => ins.icmp(ICmp::Neq, lhs, rhs),
-            BinOpKind::Lt => ins.icmp(ICmp::Slt, lhs, rhs),
-            BinOpKind::LtEq => ins.icmp(ICmp::Slte, lhs, rhs),
-            BinOpKind::Gt => ins.icmp(ICmp::Sgt, lhs, rhs),
-            BinOpKind::GtEq => ins.icmp(ICmp::Sgte, lhs, rhs),
+            BinOpKind::Eq => self.build_cmp(ICmp::Eq, lhs, rhs),
+            BinOpKind::Neq => self.build_cmp(ICmp::Neq, lhs, rhs),
+            BinOpKind::Lt => self.build_cmp(ICmp::Slt, lhs, rhs),
+            BinOpKind::LtEq => self.build_cmp(ICmp::Slte, lhs, rhs),
+            BinOpKind::Gt => self.build_cmp(ICmp::Sgt, lhs, rhs),
+            BinOpKind::GtEq => self.build_cmp(ICmp::Sgte, lhs, rhs),
             BinOpKind::Shl => ins.ishl(lhs, rhs),
             BinOpKind::Shr => ins.ushr(lhs, rhs),
             BinOpKind::Add => ins.iadd(lhs, rhs),
@@ -501,37 +605,62 @@ fn unescape(str: &[u8]) -> Result<Vec<u8>, usize> {
 impl StmtVisitor for Function<'_> {
     fn visit_auto(&mut self, auto: &AutoStmt) {
         for decl in &auto.decls {
-            // TODO: use const
-            self.create_auto(&decl.name);
+            if let Some(lit) = &decl.value {
+                if matches!(lit.kind, LiteralKind::Number) {
+                    let size = self.ctx.create_number(lit.value);
+                    self.create_auto(&decl.name, size as u32);
+                } else {
+                    self.ctx
+                        .diag
+                        .error(lit.span, "auto array size must be integer")
+                        .finish();
+                }
+            } else {
+                self.create_auto(&decl.name, 1);
+            }
         }
     }
 
     fn visit_extrn(&mut self, extrn: &ExtrnStmt) {
         for name in &extrn.names {
-            if let Some(global) = self.globals.get(&name.value) {
+            if let Some(global) = self.ctx.globals.get(&name.value) {
                 match global.id {
                     clm::FuncOrDataId::Func(func_id) => {
-                        let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
-                        let addr = self.builder.ins().func_addr(self.word_type, func_ref);
+                        let func_ref = self
+                            .ctx
+                            .module
+                            .declare_func_in_func(func_id, self.builder.func);
+                        let addr = self.builder.ins().func_addr(self.ctx.word_type, func_ref);
                         self.declare_auto(name, addr, true);
                     }
                     clm::FuncOrDataId::Data(data_id) => {
-                        let gv = self.module.declare_data_in_func(data_id, self.builder.func);
-                        let value = self.builder.ins().global_value(self.word_type, gv);
-                        self.declare_auto(name, value, true);
+                        let gv = self
+                            .ctx
+                            .module
+                            .declare_data_in_func(data_id, self.builder.func);
+                        let value = self.builder.ins().global_value(self.ctx.word_type, gv);
+                        self.declare_auto(name, value, false);
                     }
                 }
             } else {
                 let global_name = name.value.display().to_str().unwrap();
-                let mut signature = self.module.make_signature();
-                signature.params.push(clir::AbiParam::new(self.word_type));
-                signature.returns.push(clir::AbiParam::new(self.word_type));
+                let mut signature = self.ctx.module.make_signature();
+                signature
+                    .params
+                    .push(clir::AbiParam::new(self.ctx.word_type));
+                signature
+                    .returns
+                    .push(clir::AbiParam::new(self.ctx.word_type));
                 let func_id = self
+                    .ctx
                     .module
                     .declare_function(global_name, clm::Linkage::Import, &signature)
                     .unwrap();
-                let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
-                let addr = self.builder.ins().func_addr(self.word_type, func_ref);
+                let func_ref = self
+                    .ctx
+                    .module
+                    .declare_func_in_func(func_id, self.builder.func);
+                let addr = self.builder.ins().func_addr(self.ctx.word_type, func_ref);
                 self.declare_auto(name, addr, true);
             }
         }
@@ -564,11 +693,42 @@ impl StmtVisitor for Function<'_> {
                 self.make_rvalue(&mut res);
                 res.inner
             }
-            None => self.builder.ins().iconst(self.word_type, 0),
+            None => self.builder.ins().iconst(self.ctx.word_type, 0),
         };
         self.builder
             .ins()
             .jump(self.return_block, &[clir::BlockArg::Value(val)]);
+    }
+
+    fn visit_cond(&mut self, cond: &CondStmt) {
+        if let Some(mut condition) = self.visit_expr(&cond.cond) {
+            let then_bb = self.builder.create_block();
+            let end_bb = self.builder.create_block();
+
+            let else_or_end_bb = if cond.else_stmt.is_some() {
+                self.builder.create_block()
+            } else {
+                end_bb
+            };
+            self.make_rvalue(&mut condition);
+            self.builder
+                .ins()
+                .brif(condition.inner, then_bb, &[], else_or_end_bb, &[]);
+
+            // then
+            self.builder.switch_to_block(then_bb);
+            self.visit_stmt(&cond.then_stmt);
+            self.builder.ins().jump(end_bb, &[]);
+
+            // else
+            if let Some(else_stmt) = &cond.else_stmt {
+                self.builder.switch_to_block(else_or_end_bb);
+                self.visit_stmt(else_stmt);
+                self.builder.ins().jump(end_bb, &[]);
+            }
+
+            self.builder.switch_to_block(end_bb);
+        }
     }
 }
 
@@ -577,13 +737,14 @@ impl ExprVisitor for Function<'_> {
 
     fn visit_name(&mut self, name: &Name) -> Self::Value {
         if let Some(info) = self.autos.get(&name.value) {
-            Some(if info.is_global {
+            Some(if info.is_rvalue {
                 Value::rvalue(info.value)
             } else {
                 Value::lvalue(info.value)
             })
         } else {
-            self.diag
+            self.ctx
+                .diag
                 .error(
                     name.span,
                     format!("undefined name {}", name.value.display()),
@@ -611,10 +772,12 @@ impl ExprVisitor for Function<'_> {
                 return None;
             }
 
-            let a =
-                self.builder
-                    .ins()
-                    .load(self.word_type, clir::MemFlags::trusted(), lhs.inner, 0);
+            let a = self.builder.ins().load(
+                self.ctx.word_type,
+                clir::MemFlags::trusted(),
+                lhs.inner,
+                0,
+            );
             let b = self.apply_binary(bin_op, a, rhs.inner);
             self.builder
                 .ins()
@@ -623,7 +786,8 @@ impl ExprVisitor for Function<'_> {
         } else if let Some(res) = self.try_store(rhs, lhs) {
             Some(res)
         } else {
-            self.diag
+            self.ctx
+                .diag
                 .error(assign.op.span, "left operand of assignment must be lvalue")
                 .add_label(assign.lhs.span, "found rvalue")
                 .finish();
@@ -644,7 +808,10 @@ impl ExprVisitor for Function<'_> {
                 self.make_rvalue(&mut expr);
                 Some(Value::rvalue(self.builder.ins().bnot(expr.inner)))
             }
-            Deref => Some(Value::lvalue(expr.inner)),
+            Deref => {
+                self.make_rvalue(&mut expr);
+                Some(Value::lvalue(expr.inner))
+            }
             Ref => {
                 if expr.is_lvalue {
                     Some(Value::rvalue(expr.inner))
@@ -704,22 +871,42 @@ impl ExprVisitor for Function<'_> {
         let off = self
             .builder
             .ins()
-            .imul_imm(off_in_words.inner, self.word_type.bytes() as i64);
+            .imul_imm(off_in_words.inner, self.ctx.word_type.bytes() as i64);
         Some(Value::lvalue(self.builder.ins().iadd(base.inner, off)))
     }
 
     fn visit_ternary(&mut self, ternary: &TernaryExpr) -> Self::Value {
-        let mut cond = self.visit_expr(&ternary.cond)?;
-        let mut then_expr = self.visit_expr(&ternary.then_expr)?;
-        let mut else_expr = self.visit_expr(&ternary.else_expr)?;
-        self.make_rvalue(&mut cond);
-        self.make_rvalue(&mut then_expr);
-        self.make_rvalue(&mut else_expr);
-        let res = self
-            .builder
+        let mut condition = self.visit_expr(&ternary.cond)?;
+        self.make_rvalue(&mut condition);
+
+        let then_bb = self.builder.create_block();
+        let else_bb = self.builder.create_block();
+        let end_bb = self.builder.create_block();
+
+        self.make_rvalue(&mut condition);
+        self.builder
             .ins()
-            .select(cond.inner, then_expr.inner, else_expr.inner);
-        Some(Value::rvalue(res))
+            .brif(condition.inner, then_bb, &[], else_bb, &[]);
+
+        // then
+        self.builder.switch_to_block(then_bb);
+        let mut then_val = self.visit_expr(&ternary.then_expr)?;
+        self.make_rvalue(&mut then_val);
+        self.builder
+            .ins()
+            .jump(end_bb, &[clir::BlockArg::Value(then_val.inner)]);
+
+        // else
+        self.builder.switch_to_block(else_bb);
+        let mut else_val = self.visit_expr(&ternary.else_expr)?;
+        self.make_rvalue(&mut else_val);
+        self.builder
+            .ins()
+            .jump(end_bb, &[clir::BlockArg::Value(else_val.inner)]);
+
+        self.builder.append_block_param(end_bb, self.ctx.word_type);
+        self.builder.switch_to_block(end_bb);
+        Some(Value::rvalue(self.builder.block_params(end_bb)[0]))
     }
 
     fn visit_call(&mut self, call: &CallExpr) -> Self::Value {
@@ -733,12 +920,12 @@ impl ExprVisitor for Function<'_> {
             arg_values.push(val.inner);
         }
         let sig_ref = self.signatures.entry(call.args.len()).or_insert_with(|| {
-            let mut sig = self.module.make_signature();
+            let mut sig = self.ctx.module.make_signature();
             sig.params.extend(std::iter::repeat_n(
-                clir::AbiParam::new(self.word_type),
+                clir::AbiParam::new(self.ctx.word_type),
                 call.args.len(),
             ));
-            sig.returns.push(clir::AbiParam::new(self.word_type));
+            sig.returns.push(clir::AbiParam::new(self.ctx.word_type));
             self.builder.import_signature(sig)
         });
         let inst = self
@@ -774,7 +961,7 @@ impl Value {
 #[derive(Clone, Copy)]
 struct AutoInfo {
     value: clir::Value,
-    is_global: bool,
+    is_rvalue: bool,
     span: Span,
 }
 
