@@ -404,7 +404,7 @@ impl<'f> Function<'f> {
         }
     }
 
-    fn try_store(&mut self, mut value: Value, addr: Value) -> Option<()> {
+    fn try_store(&mut self, mut value: Value, addr: Value) -> Option<Value> {
         if !addr.is_lvalue {
             return None;
         }
@@ -412,7 +412,7 @@ impl<'f> Function<'f> {
         self.builder
             .ins()
             .store(clir::MemFlags::trusted(), value.inner, addr.inner, 0);
-        Some(())
+        Some(value)
     }
 
     fn incdec(&mut self, x: Value, imm: i64, is_post: bool) -> Option<clir::Value> {
@@ -439,6 +439,32 @@ impl<'f> Function<'f> {
             )
             .add_label(unary.expr.span, "found rvalue")
             .finish();
+    }
+
+    fn apply_binary(
+        &mut self,
+        binop: BinOpKind,
+        lhs: clir::Value,
+        rhs: clir::Value,
+    ) -> clir::Value {
+        let ins = self.builder.ins();
+        match binop {
+            BinOpKind::Or => ins.bor(lhs, rhs),
+            BinOpKind::And => ins.band(lhs, rhs),
+            BinOpKind::Eq => ins.icmp(ICmp::Eq, lhs, rhs),
+            BinOpKind::Neq => ins.icmp(ICmp::Neq, lhs, rhs),
+            BinOpKind::Lt => ins.icmp(ICmp::Slt, lhs, rhs),
+            BinOpKind::LtEq => ins.icmp(ICmp::Slte, lhs, rhs),
+            BinOpKind::Gt => ins.icmp(ICmp::Sgt, lhs, rhs),
+            BinOpKind::GtEq => ins.icmp(ICmp::Sgte, lhs, rhs),
+            BinOpKind::Shl => ins.ishl(lhs, rhs),
+            BinOpKind::Shr => ins.ushr(lhs, rhs),
+            BinOpKind::Add => ins.iadd(lhs, rhs),
+            BinOpKind::Sub => ins.isub(lhs, rhs),
+            BinOpKind::Rem => ins.srem(lhs, rhs),
+            BinOpKind::Mul => ins.imul(lhs, rhs),
+            BinOpKind::Div => ins.imul(lhs, rhs),
+        }
     }
 }
 
@@ -578,13 +604,24 @@ impl ExprVisitor for Function<'_> {
     }
 
     fn visit_assign(&mut self, assign: &AssignExpr) -> Self::Value {
-        let mut lhs = self.visit_expr(&assign.lhs)?;
+        let lhs = self.visit_expr(&assign.lhs)?;
         let rhs = self.visit_expr(&assign.rhs)?;
-        if let Some(_bin_op) = assign.op.kind {
-            todo!()
-        } else if self.try_store(rhs, lhs).is_some() {
-            self.make_rvalue(&mut lhs);
-            Some(lhs)
+        if let Some(bin_op) = assign.op.kind {
+            if !lhs.is_lvalue {
+                return None;
+            }
+
+            let a =
+                self.builder
+                    .ins()
+                    .load(self.word_type, clir::MemFlags::trusted(), lhs.inner, 0);
+            let b = self.apply_binary(bin_op, a, rhs.inner);
+            self.builder
+                .ins()
+                .store(clir::MemFlags::trusted(), b, lhs.inner, 0);
+            Some(Value::rvalue(b))
+        } else if let Some(res) = self.try_store(rhs, lhs) {
+            Some(res)
         } else {
             self.diag
                 .error(assign.op.span, "left operand of assignment must be lvalue")
@@ -654,27 +691,7 @@ impl ExprVisitor for Function<'_> {
         self.make_rvalue(&mut rhs);
         let lhs = lhs.inner;
         let rhs = rhs.inner;
-
-        let ins = self.builder.ins();
-        let res = match binary.op.kind {
-            BinOpKind::Or => ins.bor(lhs, rhs),
-            BinOpKind::And => ins.band(lhs, rhs),
-            BinOpKind::Eq => ins.icmp(ICmp::Eq, lhs, rhs),
-            BinOpKind::Neq => ins.icmp(ICmp::Neq, lhs, rhs),
-            BinOpKind::Lt => ins.icmp(ICmp::Slt, lhs, rhs),
-            BinOpKind::LtEq => ins.icmp(ICmp::Slte, lhs, rhs),
-            BinOpKind::Gt => ins.icmp(ICmp::Sgt, lhs, rhs),
-            BinOpKind::GtEq => ins.icmp(ICmp::Sgte, lhs, rhs),
-            BinOpKind::Shl => ins.ishl(lhs, rhs),
-            BinOpKind::Shr => ins.ushr(lhs, rhs),
-            BinOpKind::Add => ins.iadd(lhs, rhs),
-            BinOpKind::Sub => ins.isub(lhs, rhs),
-            BinOpKind::Rem => ins.srem(lhs, rhs),
-            BinOpKind::Mul => ins.imul(lhs, rhs),
-            BinOpKind::Div => ins.imul(lhs, rhs),
-        };
-
-        Some(Value::rvalue(res))
+        Some(Value::rvalue(self.apply_binary(binary.op.kind, lhs, rhs)))
     }
 
     // NOTE: addr is bytes on modern systems, but in B it is words
