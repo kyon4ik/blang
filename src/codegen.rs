@@ -342,39 +342,18 @@ impl<'f> Function<'f> {
                                 .finish();
                             None
                         }
-                        1 => {
-                            if bytes[0] == b'*' {
-                                self.diag
-                                    .error(literal.span, "expected escaped character")
-                                    .finish();
-                                None
-                            } else {
-                                Some(bytes[0])
-                            }
-                        }
+                        1 => Some(bytes[0] as u16),
                         2 => {
                             if bytes[0] != b'*' {
-                                self.diag
-                                    .error(literal.span, "first byte must be escape symbol '*'")
-                                    .finish();
-                                None
+                                Some((bytes[0] as u16) << u8::BITS | bytes[1] as u16)
                             } else {
-                                match bytes[1] {
-                                    b'0' | b'e' => Some(b'\0'),
-                                    b'(' => Some(b'{'),
-                                    b')' => Some(b'}'),
-                                    b't' => Some(b'\t'),
-                                    b'*' => Some(b'*'),
-                                    b'\'' => Some(b'\''),
-                                    b'"' => Some(b'"'),
-                                    b'n' => Some(b'\n'),
-                                    _ => {
-                                        self.diag
-                                            .error(literal.span, "unknown escape symbol")
-                                            .finish();
-                                        None
-                                    }
+                                let c = unescape_char(bytes[1]);
+                                if c.is_none() {
+                                    self.diag
+                                        .error(literal.span, "unknown escape symbol")
+                                        .finish();
                                 }
+                                c.map(u16::from)
                             }
                         }
                         _ => {
@@ -394,7 +373,16 @@ impl<'f> Function<'f> {
                     let gv = self.strings.entry(literal.value).or_insert_with(|| {
                         let data_id = self.module.declare_anonymous_data(true, false).unwrap();
                         let mut desc = clm::DataDescription::new();
-                        let mut data = literal.value.display().to_vec();
+                        let mut data = match unescape(literal.value.display()) {
+                            Ok(data) => data,
+                            Err(place) => {
+                                let start = literal.span.start + place as u32;
+                                self.diag
+                                    .error(Span::new(start, start + 1), "unknown escape symbol")
+                                    .finish();
+                                return clir::GlobalValue::from_u32(0);
+                            }
+                        };
                         data.push(b'\0');
                         desc.define(data.into_boxed_slice());
                         self.module.define_data(data_id, &desc).unwrap();
@@ -452,6 +440,36 @@ impl<'f> Function<'f> {
             .add_label(unary.expr.span, "found rvalue")
             .finish();
     }
+}
+
+#[inline]
+fn unescape_char(char: u8) -> Option<u8> {
+    match char {
+        b'0' | b'e' => Some(b'\0'),
+        b'(' => Some(b'{'),
+        b')' => Some(b'}'),
+        b't' => Some(b'\t'),
+        b'*' => Some(b'*'),
+        b'\'' => Some(b'\''),
+        b'"' => Some(b'"'),
+        b'n' => Some(b'\n'),
+        _ => None,
+    }
+}
+
+fn unescape(str: &[u8]) -> Result<Vec<u8>, usize> {
+    let mut res = Vec::new();
+    let mut iter = str.iter().copied().enumerate();
+    while let Some((_, c)) = iter.next() {
+        if c == b'*'
+            && let Some((i2, c2)) = iter.next()
+        {
+            res.push(unescape_char(c2).ok_or(i2)?);
+        } else {
+            res.push(c);
+        }
+    }
+    Ok(res)
 }
 
 impl StmtVisitor for Function<'_> {
