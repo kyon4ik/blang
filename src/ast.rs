@@ -9,7 +9,6 @@ use crate::lexer::token::{BinOpKind, LiteralKind};
 
 pub mod node;
 pub mod print;
-pub mod resolve;
 pub mod visit;
 
 #[derive(Debug)]

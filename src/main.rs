@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use blang::ast::print::PrettyPrinter;
-use blang::ast::resolve::NameResolver;
 use blang::codegen::Module;
 use blang::diagnostics::{DiagConfig, Diagnostics, SourceMap};
 use blang::parser::Parser;
@@ -51,10 +50,6 @@ fn main() {
 
     let mut parser = Parser::new(&src, diag.clone());
     let defs = parser.parse_program();
-    let mut resolver = NameResolver::new(diag.clone());
-    for def in &defs {
-        resolver.visit_def(def);
-    }
 
     let mut module = Module::new(
         "x86_64-unknown-linux-gnu",

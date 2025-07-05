@@ -34,11 +34,18 @@ struct Context {
 
 struct Function<'f> {
     builder: clf::FunctionBuilder<'f>,
-    labels: FxHashMap<InternedStr, clir::Block>,
+    labels: FxHashMap<InternedStr, LabelInfo>,
+    unused_labels: FxHashMap<InternedStr, Span>,
     autos: FxHashMap<InternedStr, AutoInfo>,
     signatures: FxHashMap<usize, clir::SigRef>,
     return_block: clir::Block,
     ctx: &'f mut Context,
+    name: &'f Name,
+}
+
+struct LabelInfo {
+    block: clir::Block,
+    span: Span,
 }
 
 struct GlobalInfo {
@@ -345,7 +352,7 @@ impl Module {
                     .signature
                     .clone();
 
-                let cfunc = Function::new(self);
+                let cfunc = Function::new(self, &def.name);
                 cfunc.build(params, body);
 
                 if self.gen_ctx.diag.has_errors() {
@@ -371,16 +378,18 @@ impl Module {
 }
 
 impl<'f> Function<'f> {
-    fn new(module: &'f mut Module) -> Self {
+    fn new(module: &'f mut Module, name: &'f Name) -> Self {
         let builder = clf::FunctionBuilder::new(&mut module.ctx.func, &mut module.func_ctx);
 
         Self {
             builder,
             labels: FxHashMap::default(),
+            unused_labels: FxHashMap::default(),
             autos: FxHashMap::default(),
             signatures: FxHashMap::default(),
             return_block: clir::Block::from_u32(0),
             ctx: &mut module.gen_ctx,
+            name,
         }
     }
 
@@ -399,6 +408,13 @@ impl<'f> Function<'f> {
         self.return_block = self.builder.create_block();
 
         self.visit_stmt(body);
+
+        for (value, span) in self.unused_labels.drain() {
+            self.ctx
+                .diag
+                .error(span, format!("undefined label '{}'", value.display()))
+                .finish();
+        }
 
         if self.ctx.diag.has_errors() {
             return;
@@ -672,21 +688,48 @@ impl StmtVisitor for Function<'_> {
     }
 
     fn visit_label(&mut self, label: &LabelStmt) {
-        let label_block = self.builder.create_block();
+        let label_block = self
+            .labels
+            .entry(label.name.value)
+            .and_modify(|info| {
+                if info.span != Span::empty() {
+                    self.ctx
+                        .diag
+                        .error(
+                            label.name.span,
+                            format!("redefinition of label '{}'", label.name.value.display()),
+                        )
+                        .add_label(info.span, "first defined here")
+                        .finish();
+                } else {
+                    self.unused_labels.remove(&label.name.value);
+                }
+            })
+            .or_insert_with(|| LabelInfo {
+                block: self.builder.create_block(),
+                span: label.name.span,
+            })
+            .block;
         self.builder.ins().jump(label_block, &[]);
         self.builder.switch_to_block(label_block);
-        self.labels.insert(label.name.value, label_block);
         self.visit_stmt(&label.stmt);
     }
 
     fn visit_goto(&mut self, goto: &GotoStmt) {
-        if let Some(label_block) = self.labels.get(&goto.label.value) {
-            self.builder.ins().jump(*label_block, &[]);
-            let after_goto = self.builder.create_block();
-            self.builder.switch_to_block(after_goto);
-        } else {
-            todo!()
-        }
+        let label_block = self
+            .labels
+            .entry(goto.label.value)
+            .or_insert_with(|| {
+                self.unused_labels.insert(goto.label.value, goto.label.span);
+                LabelInfo {
+                    block: self.builder.create_block(),
+                    span: Span::empty(),
+                }
+            })
+            .block;
+        self.builder.ins().jump(label_block, &[]);
+        let after_goto = self.builder.create_block();
+        self.builder.switch_to_block(after_goto);
     }
 
     fn visit_return(&mut self, return_: &ReturnStmt) {
@@ -780,8 +823,13 @@ impl ExprVisitor for Function<'_> {
                 .diag
                 .error(
                     name.span,
-                    format!("undefined name {}", name.value.display()),
+                    format!(
+                        "undefined name '{}' in function '{}'",
+                        name.value.display(),
+                        self.name.value.display()
+                    ),
                 )
+                .add_label(self.name.span, "provide extrn in this function")
                 .finish();
             None
         }
