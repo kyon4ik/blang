@@ -43,6 +43,7 @@ struct Function<'f> {
 
 struct GlobalInfo {
     id: clm::FuncOrDataId,
+    is_rvalue: bool,
     span: Span,
 }
 
@@ -172,14 +173,15 @@ impl Module {
 
     fn run_global_pass_on(&mut self, def: &DefAst) {
         let global_name = def.name.value.display().to_str().unwrap();
-        let id = match &def.kind {
-            DefKind::Vector { .. } => {
+        let (id, is_rvalue) = match &def.kind {
+            DefKind::Vector { size, .. } => {
                 let data_id = self
                     .module()
                     .declare_data(global_name, clm::Linkage::Export, true, false)
                     .unwrap();
 
-                clm::FuncOrDataId::Data(data_id)
+                let is_rvalue = !matches!(size, VecSize::Undef);
+                (clm::FuncOrDataId::Data(data_id), is_rvalue)
             }
             DefKind::Function { params, .. } => {
                 let params = &params.params;
@@ -195,7 +197,7 @@ impl Module {
                     .module()
                     .declare_function(global_name, clm::Linkage::Export, &sig)
                     .unwrap();
-                clm::FuncOrDataId::Func(func_id)
+                (clm::FuncOrDataId::Func(func_id), true)
             }
         };
         self.gen_ctx
@@ -213,6 +215,7 @@ impl Module {
             })
             .or_insert(GlobalInfo {
                 id,
+                is_rvalue,
                 span: def.name.span,
             });
     }
@@ -245,12 +248,14 @@ impl Module {
                     },
                 };
                 let size = size.max(list.len());
+                let size_in_bytes = size * self.gen_ctx.word_type.bytes() as usize;
 
                 let mut data = clm::DataDescription::new();
+                data.set_align(self.gen_ctx.word_type.bytes() as u64);
                 if list.is_empty() {
-                    data.define_zeroinit(size);
+                    data.define_zeroinit(size_in_bytes);
                 } else {
-                    let mut bytes = Vec::new();
+                    let mut bytes = Vec::with_capacity(size_in_bytes);
                     for ival in list {
                         match ival {
                             ImmVal::Const(lit) => match lit.kind {
@@ -319,6 +324,7 @@ impl Module {
                             }
                         }
                     }
+                    debug_assert_eq!(bytes.len(), size_in_bytes);
                     data.define(bytes.into_boxed_slice());
                 };
 
@@ -347,15 +353,14 @@ impl Module {
                     return;
                 }
 
-                if print {
-                    println!("{}", self.ctx.func.display());
-                }
-                clb::verify_function(&self.ctx.func, self.gen_ctx.module.isa().flags()).unwrap();
-
                 self.gen_ctx
                     .module
                     .define_function(func_id, &mut self.ctx)
                     .unwrap();
+                if print {
+                    println!("{}", self.ctx.func.display());
+                }
+                clb::verify_function(&self.ctx.func, self.gen_ctx.module.isa().flags()).unwrap();
             }
         }
     }
@@ -450,7 +455,7 @@ impl<'f> Function<'f> {
             ));
 
         let addr = self.builder.ins().stack_addr(self.ctx.word_type, slot, 0);
-        self.declare_auto(name, addr, false);
+        self.declare_auto(name, addr, size > 1);
     }
 
     fn create_param(&mut self, name: &Name, value: clir::Value) {
@@ -567,7 +572,7 @@ impl<'f> Function<'f> {
             BinOpKind::Sub => ins.isub(lhs, rhs),
             BinOpKind::Rem => ins.srem(lhs, rhs),
             BinOpKind::Mul => ins.imul(lhs, rhs),
-            BinOpKind::Div => ins.imul(lhs, rhs),
+            BinOpKind::Div => ins.sdiv(lhs, rhs),
         }
     }
 }
@@ -631,7 +636,7 @@ impl StmtVisitor for Function<'_> {
                             .module
                             .declare_func_in_func(func_id, self.builder.func);
                         let addr = self.builder.ins().func_addr(self.ctx.word_type, func_ref);
-                        self.declare_auto(name, addr, true);
+                        self.declare_auto(name, addr, global.is_rvalue);
                     }
                     clm::FuncOrDataId::Data(data_id) => {
                         let gv = self
@@ -639,7 +644,7 @@ impl StmtVisitor for Function<'_> {
                             .module
                             .declare_data_in_func(data_id, self.builder.func);
                         let value = self.builder.ins().global_value(self.ctx.word_type, gv);
-                        self.declare_auto(name, value, false);
+                        self.declare_auto(name, value, global.is_rvalue);
                     }
                 }
             } else {
@@ -698,6 +703,8 @@ impl StmtVisitor for Function<'_> {
         self.builder
             .ins()
             .jump(self.return_block, &[clir::BlockArg::Value(val)]);
+        let after_return = self.builder.create_block();
+        self.builder.switch_to_block(after_return);
     }
 
     fn visit_cond(&mut self, cond: &CondStmt) {
@@ -729,6 +736,32 @@ impl StmtVisitor for Function<'_> {
 
             self.builder.switch_to_block(end_bb);
         }
+    }
+
+    fn visit_while(&mut self, while_: &WhileStmt) {
+        let cond_bb = self.builder.create_block();
+        let body_bb = self.builder.create_block();
+        let end_bb = self.builder.create_block();
+
+        self.builder.ins().jump(cond_bb, &[]);
+
+        // condition
+        self.builder.switch_to_block(cond_bb);
+        let mut cond = self
+            .visit_expr(&while_.cond)
+            .unwrap_or(Value::rvalue(clir::Value::from_u32(0)));
+        self.make_rvalue(&mut cond);
+        self.builder
+            .ins()
+            .brif(cond.inner, body_bb, &[], end_bb, &[]);
+
+        // body
+        self.builder.switch_to_block(body_bb);
+        self.visit_stmt(&while_.stmt);
+        self.builder.ins().jump(cond_bb, &[]);
+
+        // end
+        self.builder.switch_to_block(end_bb);
     }
 }
 
