@@ -1,0 +1,38 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/config.schema.json",
+  "grammars": [
+    {
+      "name": "b",
+      "camelcase": "B",
+      "title": "B",
+      "scope": "source.b",
+      "file-types": [
+        "b"
+      ],
+      "injection-regex": "^b$",
+      "class-name": "TreeSitterB"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "B grammar for tree-sitter",
+    "authors": [
+      {
+        "name": "Innokentiy Popov"
+      }
+    ],
+    "links": {
+      "repository": "https://github.com/kyon4ik/blang"
+    }
+  },
+  "bindings": {
+    "c": true,
+    "go": true,
+    "node": true,
+    "python": true,
+    "rust": true,
+    "swift": true,
+    "zig": false
+  }
+}
