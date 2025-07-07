@@ -36,6 +36,7 @@ struct Function<'f> {
     builder: clf::FunctionBuilder<'f>,
     labels: FxHashMap<InternedStr, LabelInfo>,
     unused_labels: FxHashMap<InternedStr, Span>,
+    switch_stack: Vec<clf::Switch>,
     autos: FxHashMap<InternedStr, AutoInfo>,
     signatures: FxHashMap<usize, clir::SigRef>,
     return_block: clir::Block,
@@ -179,34 +180,6 @@ impl Module {
     }
 
     fn run_global_pass_on(&mut self, def: &DefAst) {
-        let global_name = def.name.value.display().to_str().unwrap();
-        let (id, is_rvalue) = match &def.kind {
-            DefKind::Vector { size, .. } => {
-                let data_id = self
-                    .module()
-                    .declare_data(global_name, clm::Linkage::Export, true, false)
-                    .unwrap();
-
-                let is_rvalue = !matches!(size, VecSize::Undef);
-                (clm::FuncOrDataId::Data(data_id), is_rvalue)
-            }
-            DefKind::Function { params, .. } => {
-                let params = &params.params;
-                let mut sig = self.module().make_signature();
-                sig.params.extend(std::iter::repeat_n(
-                    clir::AbiParam::new(self.gen_ctx.word_type),
-                    params.len(),
-                ));
-                sig.returns
-                    .push(clir::AbiParam::new(self.gen_ctx.word_type));
-
-                let func_id = self
-                    .module()
-                    .declare_function(global_name, clm::Linkage::Export, &sig)
-                    .unwrap();
-                (clm::FuncOrDataId::Func(func_id), true)
-            }
-        };
         self.gen_ctx
             .globals
             .entry(def.name.value)
@@ -215,29 +188,59 @@ impl Module {
                     .diag
                     .error(
                         def.name.span,
-                        format!("redefinition of global name {}", def.name.value.display()),
+                        format!("redefinition of global name '{}'", def.name.value.display()),
                     )
                     .add_label(global.span, "first defined here")
                     .finish();
             })
-            .or_insert(GlobalInfo {
-                id,
-                is_rvalue,
-                span: def.name.span,
+            .or_insert_with(|| {
+                let global_name = def.name.value.display().to_str().unwrap();
+                let (id, is_rvalue) = match &def.kind {
+                    DefKind::Vector { size, .. } => {
+                        let data_id = self
+                            .gen_ctx
+                            .module
+                            .declare_data(global_name, clm::Linkage::Export, true, false)
+                            .unwrap();
+
+                        let is_rvalue = !matches!(size, VecSize::Undef);
+                        (clm::FuncOrDataId::Data(data_id), is_rvalue)
+                    }
+                    DefKind::Function { params, .. } => {
+                        let params = &params.params;
+                        let mut sig = self.gen_ctx.module.make_signature();
+                        sig.params.extend(std::iter::repeat_n(
+                            clir::AbiParam::new(self.gen_ctx.word_type),
+                            params.len(),
+                        ));
+                        sig.returns
+                            .push(clir::AbiParam::new(self.gen_ctx.word_type));
+
+                        let func_id = self
+                            .gen_ctx
+                            .module
+                            .declare_function(global_name, clm::Linkage::Export, &sig)
+                            .unwrap();
+                        (clm::FuncOrDataId::Func(func_id), true)
+                    }
+                };
+                GlobalInfo {
+                    id,
+                    is_rvalue,
+                    span: def.name.span,
+                }
             });
     }
 
     fn run_local_pass_on(&mut self, def: &DefAst, print: bool) {
-        let global = self
-            .gen_ctx
-            .globals
-            .get(&def.name.value)
-            .expect("Run local pass to define globals");
+        let Some(global) = self.gen_ctx.globals.get(&def.name.value) else {
+            return;
+        };
         match &def.kind {
             DefKind::Vector { list, size } => {
                 let data_id = match global.id {
                     clm::FuncOrDataId::Data(data_id) => data_id,
-                    _ => panic!("Expected data id in globals table"),
+                    _ => return,
                 };
 
                 let size = match size {
@@ -340,7 +343,7 @@ impl Module {
             DefKind::Function { params, body } => {
                 let func_id = match global.id {
                     clm::FuncOrDataId::Func(func_id) => func_id,
-                    _ => panic!("Expected function id in globals table"),
+                    _ => return,
                 };
                 self.ctx.clear();
                 self.ctx.func.name =
@@ -385,6 +388,7 @@ impl<'f> Function<'f> {
             builder,
             labels: FxHashMap::default(),
             unused_labels: FxHashMap::default(),
+            switch_stack: Vec::default(),
             autos: FxHashMap::default(),
             signatures: FxHashMap::default(),
             return_block: clir::Block::from_u32(0),
@@ -448,7 +452,7 @@ impl<'f> Function<'f> {
                     .diag
                     .error(
                         name.span,
-                        format!("redefinition of name {}", name.value.display()),
+                        format!("redefinition of name '{}'", name.value.display()),
                     )
                     .add_label(info.span, "first defined here")
                     .finish();
@@ -806,6 +810,59 @@ impl StmtVisitor for Function<'_> {
         // end
         self.builder.switch_to_block(end_bb);
     }
+
+    fn visit_switch(&mut self, switch: &SwitchStmt) {
+        let mut cond = self
+            .visit_expr(&switch.cond)
+            .unwrap_or(Value::rvalue(clir::Value::from_u32(0)));
+        self.make_rvalue(&mut cond);
+        let switch_bb = self.builder.create_block();
+        let start_stmts_bb = self.builder.create_block();
+        self.builder.ins().jump(switch_bb, &[]);
+        self.switch_stack.push(clf::Switch::new());
+        self.builder.switch_to_block(start_stmts_bb);
+        self.visit_stmt(&switch.stmt);
+        let switch_builder = self.switch_stack.pop().unwrap();
+        let fallback = self.builder.create_block();
+        self.builder.ins().jump(fallback, &[]);
+        self.builder.switch_to_block(switch_bb);
+        switch_builder.emit(&mut self.builder, cond.inner, fallback);
+        self.builder.switch_to_block(fallback);
+    }
+
+    fn visit_case(&mut self, case: &CaseStmt, _span: Span) {
+        if let Some(switch_builder) = self.switch_stack.last_mut() {
+            let val = match &case.cnst.kind {
+                LiteralKind::Number => self.ctx.create_number(case.cnst.value),
+                LiteralKind::Char => self.ctx.create_char(case.cnst.value, case.cnst.span) as i64,
+                _ => {
+                    self.ctx
+                        .diag
+                        .error(
+                            case.cnst.span,
+                            "case constant must be integer or char literal",
+                        )
+                        .finish();
+                    -1
+                }
+            };
+            let case_bb = self.builder.create_block();
+            self.builder.ins().jump(case_bb, &[]);
+            if val != -1 {
+                switch_builder.set_entry(val as u128, case_bb);
+            }
+            self.builder.switch_to_block(case_bb);
+            self.visit_stmt(&case.stmt);
+        } else {
+            self.ctx
+                .diag
+                .error(
+                    case.case_span,
+                    "case statement must be enclosed be at least one switch statement",
+                )
+                .finish();
+        }
+    }
 }
 
 impl ExprVisitor for Function<'_> {
@@ -848,32 +905,34 @@ impl ExprVisitor for Function<'_> {
     fn visit_assign(&mut self, assign: &AssignExpr) -> Self::Value {
         let lhs = self.visit_expr(&assign.lhs)?;
         let rhs = self.visit_expr(&assign.rhs)?;
-        if let Some(bin_op) = assign.op.kind {
+        let res = if let Some(bin_op) = assign.op.kind {
             if !lhs.is_lvalue {
-                return None;
+                None
+            } else {
+                let a = self.builder.ins().load(
+                    self.ctx.word_type,
+                    clir::MemFlags::trusted(),
+                    lhs.inner,
+                    0,
+                );
+                let b = self.apply_binary(bin_op, a, rhs.inner);
+                self.builder
+                    .ins()
+                    .store(clir::MemFlags::trusted(), b, lhs.inner, 0);
+                Some(Value::rvalue(b))
             }
-
-            let a = self.builder.ins().load(
-                self.ctx.word_type,
-                clir::MemFlags::trusted(),
-                lhs.inner,
-                0,
-            );
-            let b = self.apply_binary(bin_op, a, rhs.inner);
-            self.builder
-                .ins()
-                .store(clir::MemFlags::trusted(), b, lhs.inner, 0);
-            Some(Value::rvalue(b))
-        } else if let Some(res) = self.try_store(rhs, lhs) {
-            Some(res)
         } else {
+            self.try_store(rhs, lhs)
+        };
+
+        if res.is_none() {
             self.ctx
                 .diag
                 .error(assign.op.span, "left operand of assignment must be lvalue")
                 .add_label(assign.lhs.span, "found rvalue")
                 .finish();
-            None
         }
+        res
     }
 
     fn visit_unary(&mut self, unary: &UnaryExpr) -> Self::Value {
