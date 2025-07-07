@@ -1,11 +1,11 @@
 here[];
 
 main() {
-	extrn here, smth;
+    extrn here, smth;
 here:
-	goto smth;
+    goto smth;
 }
 
 here() {
-	goto here;
+    goto here;
 }

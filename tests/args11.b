@@ -1,5 +1,5 @@
 g(i, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11) {
-	extrn g;
+    extrn g;
     if(i <= 0) {
     	return (a10 + 11);
     }
@@ -7,7 +7,7 @@ g(i, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11) {
 }
 
 f(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11) {
-	extrn g;
+    extrn g;
     return (a2 + g(4, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11));
 }
 

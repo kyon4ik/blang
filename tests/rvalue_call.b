@@ -15,7 +15,7 @@ baz() {
 
 main() {
     extrn printf, malloc, exit;
-	extrn foo, bar, baz;
+    extrn foo, bar, baz;
 
     auto W;
     W = &0[1];
