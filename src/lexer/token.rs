@@ -213,7 +213,7 @@ impl fmt::Display for Literal {
             "{}#{}: {}",
             self.kind,
             self.value.index(),
-            self.value.display()
+            String::from_utf8_lossy(self.value.display())
         )
     }
 }

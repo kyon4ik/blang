@@ -1,6 +1,5 @@
 use std::sync::{LazyLock, Mutex};
 
-use bstr::{BStr, ByteSlice};
 use indexmap::IndexSet;
 use rustc_hash::FxBuildHasher;
 use strum::EnumCount;
@@ -23,16 +22,12 @@ const KEYWORDS: [(&[u8], Kw); Kw::COUNT] = [
     (b"return", Kw::Return),
 ];
 
-static INTERNER: LazyLock<StringInterner> = LazyLock::new(|| {
-    StringInterner::new(
-        INTERNER_ARENA_SIZE,
-        KEYWORDS.iter().map(|(s, _)| BStr::new(s)),
-    )
-});
+static INTERNER: LazyLock<StringInterner> =
+    LazyLock::new(|| StringInterner::new(INTERNER_ARENA_SIZE, KEYWORDS.iter().map(|(s, _)| *s)));
 
 type FxIndexSet<T> = IndexSet<T, FxBuildHasher>;
 pub struct StringInterner {
-    map: Mutex<FxIndexSet<&'static BStr>>,
+    map: Mutex<FxIndexSet<&'static [u8]>>,
     arena: Arena<u8>,
 }
 
@@ -40,7 +35,7 @@ pub struct StringInterner {
 pub struct InternedStr(usize);
 
 impl StringInterner {
-    pub fn new(arena_size: usize, initial: impl Iterator<Item = &'static BStr>) -> Self {
+    pub fn new(arena_size: usize, initial: impl Iterator<Item = &'static [u8]>) -> Self {
         let map = FxIndexSet::from_iter(initial);
         let arena = Arena::with_capacity(arena_size);
 
@@ -50,29 +45,27 @@ impl StringInterner {
         }
     }
 
-    pub fn intern(&self, string: &BStr) -> InternedStr {
+    pub fn intern(&self, string: &[u8]) -> InternedStr {
         let mut map = self.map.lock().unwrap();
         let index = map.get_index_of(string).unwrap_or_else(|| {
-            let interned = self.arena.alloc_extend(string.bytes()) as *mut [u8];
+            let interned = self.arena.alloc_extend(string.iter().copied()) as *mut [u8];
 
             // SAFETY: extends lifetime to static, this is safe because arena is never
             // deallocated while map exists
-            map.insert_full(BStr::new(unsafe { &*interned })).0
+            map.insert_full(unsafe { &*interned }).0
         });
         InternedStr(index)
     }
 
-    pub fn get_str(&self, interned: InternedStr) -> &BStr {
+    pub fn get_str(&self, interned: InternedStr) -> &[u8] {
         let map = self.map.lock().unwrap();
-        map.get_index(interned.0)
-            .copied()
-            .unwrap_or(BStr::new(b"dummy"))
+        map.get_index(interned.0).copied().unwrap_or(b"dummy")
     }
 }
 
 impl InternedStr {
     pub fn new(str: &[u8]) -> Self {
-        INTERNER.intern(BStr::new(str))
+        INTERNER.intern(str)
     }
 
     pub fn dummy() -> Self {
@@ -90,7 +83,7 @@ impl InternedStr {
         self.0
     }
 
-    pub fn display(&self) -> &BStr {
+    pub fn display(&self) -> &[u8] {
         INTERNER.get_str(*self)
     }
 }

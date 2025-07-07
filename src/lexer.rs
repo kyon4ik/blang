@@ -1,6 +1,5 @@
 use std::rc::Rc;
 
-use bstr::BStr;
 use token::{BinOpKind, Literal, LiteralKind};
 pub use token::{Token, TokenKind};
 
@@ -12,7 +11,7 @@ pub mod token;
 const EOF_CHAR: u8 = b'\0';
 
 pub struct Lexer<'s> {
-    src: &'s BStr,
+    src: &'s [u8],
     pos: usize,
     diag: Rc<Diagnostics>,
 }
@@ -27,11 +26,7 @@ fn is_ident_continue(c: u8) -> bool {
 
 impl<'s> Lexer<'s> {
     pub fn new(src: &'s [u8], diag: Rc<Diagnostics>) -> Self {
-        Self {
-            src: BStr::new(src),
-            pos: 0,
-            diag,
-        }
+        Self { src, pos: 0, diag }
     }
 
     pub fn next_token(&mut self) -> Token {

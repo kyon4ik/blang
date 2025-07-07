@@ -1,4 +1,3 @@
-use bstr::BStr;
 pub use node::Node;
 use strum_macros::{Display, IntoStaticStr};
 
@@ -376,6 +375,20 @@ impl Literal {
             span,
         }
     }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        self.value.display()
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self.kind {
+            // SAFETY: number always consists of valid ASCII
+            LiteralKind::Number => unsafe { str::from_utf8_unchecked(self.as_bytes()) },
+            LiteralKind::Char | LiteralKind::String => {
+                str::from_utf8(self.as_bytes()).expect("Found non ASCII bytes in string or char")
+            }
+        }
+    }
 }
 
 impl Name {
@@ -383,7 +396,12 @@ impl Name {
         Self { value, span }
     }
 
-    pub fn as_str(&self) -> &BStr {
+    pub fn as_bytes(&self) -> &[u8] {
         self.value.display()
+    }
+
+    pub fn as_str(&self) -> &str {
+        // SAFETY: name always consists of valid ASCII
+        unsafe { str::from_utf8_unchecked(self.as_bytes()) }
     }
 }

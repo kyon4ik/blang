@@ -7,7 +7,6 @@ use crate::diagnostics::{Diagnostics, Span};
 use crate::lexer::interner::InternedStr;
 use crate::lexer::token::{BinOpKind, LiteralKind};
 
-use bstr::ByteSlice;
 use cranelift::codegen::ir as clir;
 use cranelift::codegen::{self as clb, settings::Configurable as _};
 use cranelift::frontend as clf;
@@ -76,25 +75,31 @@ impl Context {
         }
     }
 
-    fn create_number(&mut self, value: InternedStr) -> i64 {
-        *self.numbers.entry(value).or_insert_with(|| {
+    fn create_number(&mut self, lit: &Literal) -> i64 {
+        debug_assert_eq!(lit.kind, LiteralKind::Number);
+        *self.numbers.entry(lit.value).or_insert_with(|| {
             // FIXME: implement custom parsing
-            let bytes = value.display();
-            debug_assert!(bytes.is_ascii());
-            // SAFETY: number only consists of digits, it maybe not true for other literals
-            let str = unsafe { bytes.to_str_unchecked() };
-            str.parse::<i64>().unwrap()
+            match lit.as_str().parse::<i64>() {
+                Ok(num) => num,
+                Err(_) => {
+                    self.diag
+                        .error(lit.span, "failed to parse number literal")
+                        .finish();
+                    -1
+                }
+            }
         })
     }
 
-    fn create_string(&mut self, value: InternedStr, span: Span) -> clm::DataId {
-        *self.strings.entry(value).or_insert_with(|| {
+    fn create_string(&mut self, lit: &Literal) -> clm::DataId {
+        debug_assert_eq!(lit.kind, LiteralKind::String);
+        *self.strings.entry(lit.value).or_insert_with(|| {
             let data_id = self.module.declare_anonymous_data(true, false).unwrap();
             let mut desc = clm::DataDescription::new();
-            let mut data = match unescape(value.display()) {
+            let mut data = match unescape(lit.as_bytes()) {
                 Ok(data) => data,
                 Err(place) => {
-                    let start = span.start + place as u32;
+                    let start = lit.span.start + place as u32;
                     self.diag
                         .error(Span::new(start, start + 1), "unknown escape symbol")
                         .finish();
@@ -108,12 +113,13 @@ impl Context {
         })
     }
 
-    fn create_char(&mut self, value: InternedStr, span: Span) -> u16 {
-        let bytes = value.display();
+    fn create_char(&mut self, lit: &Literal) -> u16 {
+        debug_assert_eq!(lit.kind, LiteralKind::Char);
+        let bytes = lit.as_bytes();
         match bytes.len() {
             0 => {
                 self.diag
-                    .error(span, "empty character is not supported")
+                    .error(lit.span, "empty character is not supported")
                     .finish();
                 0
             }
@@ -124,14 +130,14 @@ impl Context {
                 } else {
                     let c = unescape_char(bytes[1]);
                     if c.is_none() {
-                        self.diag.error(span, "unknown escape symbol").finish();
+                        self.diag.error(lit.span, "unknown escape symbol").finish();
                     }
                     c.map(u16::from).unwrap_or(0)
                 }
             }
             _ => {
                 self.diag
-                    .error(span, "character constant is longer than 2 symbols")
+                    .error(lit.span, "character constant is longer than 2 symbols")
                     .finish();
                 0
             }
@@ -188,13 +194,13 @@ impl Module {
                     .diag
                     .error(
                         def.name.span,
-                        format!("redefinition of global name '{}'", def.name.value.display()),
+                        format!("redefinition of global name '{}'", def.name.as_str()),
                     )
                     .add_label(global.span, "first defined here")
                     .finish();
             })
             .or_insert_with(|| {
-                let global_name = def.name.value.display().to_str().unwrap();
+                let global_name = def.name.as_str();
                 let (id, is_rvalue) = match &def.kind {
                     DefKind::Vector { size, .. } => {
                         let data_id = self
@@ -247,7 +253,7 @@ impl Module {
                     VecSize::Undef => 1,
                     VecSize::Empty(_) => 0,
                     VecSize::Def { lit, .. } => match lit.kind {
-                        LiteralKind::Number => self.gen_ctx.create_number(lit.value) as usize,
+                        LiteralKind::Number => self.gen_ctx.create_number(lit) as usize,
                         _ => {
                             self.gen_ctx
                                 .diag
@@ -270,7 +276,7 @@ impl Module {
                         match ival {
                             ImmVal::Const(lit) => match lit.kind {
                                 LiteralKind::Number => {
-                                    let num = self.gen_ctx.create_number(lit.value);
+                                    let num = self.gen_ctx.create_number(lit);
 
                                     bytes.extend_from_slice(&match self
                                         .gen_ctx
@@ -283,7 +289,7 @@ impl Module {
                                     });
                                 }
                                 LiteralKind::Char => {
-                                    let char = self.gen_ctx.create_char(lit.value, lit.span) as i64;
+                                    let char = self.gen_ctx.create_char(lit) as i64;
 
                                     bytes.extend_from_slice(&match self
                                         .gen_ctx
@@ -296,7 +302,7 @@ impl Module {
                                     });
                                 }
                                 LiteralKind::String => {
-                                    let data_id = self.gen_ctx.create_string(lit.value, lit.span);
+                                    let data_id = self.gen_ctx.create_string(lit);
                                     let gv = self.module().declare_data_in_data(data_id, &mut data);
                                     data.write_data_addr(bytes.len() as u32, gv, 0);
                                     bytes.extend(std::iter::repeat_n(
@@ -416,7 +422,10 @@ impl<'f> Function<'f> {
         for (value, span) in self.unused_labels.drain() {
             self.ctx
                 .diag
-                .error(span, format!("undefined label '{}'", value.display()))
+                .error(
+                    span,
+                    format!("undefined label '{}'", Name::new(value, span).as_str()),
+                )
                 .finish();
         }
 
@@ -452,7 +461,7 @@ impl<'f> Function<'f> {
                     .diag
                     .error(
                         name.span,
-                        format!("redefinition of name '{}'", name.value.display()),
+                        format!("redefinition of name '{}'", name.as_str()),
                     )
                     .add_label(info.span, "first defined here")
                     .finish();
@@ -496,15 +505,15 @@ impl<'f> Function<'f> {
     fn create_literal(&mut self, literal: &Literal) -> clir::Value {
         match literal.kind {
             LiteralKind::Number => {
-                let num = self.ctx.create_number(literal.value);
+                let num = self.ctx.create_number(literal);
                 self.builder.ins().iconst(self.ctx.word_type, num)
             }
             LiteralKind::Char => {
-                let char = self.ctx.create_char(literal.value, literal.span) as i64;
+                let char = self.ctx.create_char(literal) as i64;
                 self.builder.ins().iconst(self.ctx.word_type, char)
             }
             LiteralKind::String => {
-                let data_id = self.ctx.create_string(literal.value, literal.span);
+                let data_id = self.ctx.create_string(literal);
                 let gv = self
                     .ctx
                     .module
@@ -632,7 +641,7 @@ impl StmtVisitor for Function<'_> {
         for decl in &auto.decls {
             if let Some(lit) = &decl.value {
                 if matches!(lit.kind, LiteralKind::Number) {
-                    let size = self.ctx.create_number(lit.value);
+                    let size = self.ctx.create_number(lit);
                     self.create_auto(&decl.name, size as u32);
                 } else {
                     self.ctx
@@ -668,7 +677,7 @@ impl StmtVisitor for Function<'_> {
                     }
                 }
             } else {
-                let global_name = name.value.display().to_str().unwrap();
+                let global_name = name.as_str();
                 let mut signature = self.ctx.module.make_signature();
                 signature
                     .params
@@ -701,7 +710,7 @@ impl StmtVisitor for Function<'_> {
                         .diag
                         .error(
                             label.name.span,
-                            format!("redefinition of label '{}'", label.name.value.display()),
+                            format!("redefinition of label '{}'", label.name.as_str()),
                         )
                         .add_label(info.span, "first defined here")
                         .finish();
@@ -833,8 +842,8 @@ impl StmtVisitor for Function<'_> {
     fn visit_case(&mut self, case: &CaseStmt, _span: Span) {
         if let Some(switch_builder) = self.switch_stack.last_mut() {
             let val = match &case.cnst.kind {
-                LiteralKind::Number => self.ctx.create_number(case.cnst.value),
-                LiteralKind::Char => self.ctx.create_char(case.cnst.value, case.cnst.span) as i64,
+                LiteralKind::Number => self.ctx.create_number(&case.cnst),
+                LiteralKind::Char => self.ctx.create_char(&case.cnst) as i64,
                 _ => {
                     self.ctx
                         .diag
@@ -882,8 +891,8 @@ impl ExprVisitor for Function<'_> {
                     name.span,
                     format!(
                         "undefined name '{}' in function '{}'",
-                        name.value.display(),
-                        self.name.value.display()
+                        name.as_str(),
+                        self.name.as_str()
                     ),
                 )
                 .add_label(self.name.span, "provide extrn in this function")

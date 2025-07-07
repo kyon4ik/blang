@@ -1,7 +1,5 @@
 use std::path::Path;
 
-use bstr::BStr;
-
 use crate::ast::print::PrettyPrinter;
 use crate::ast::visit::ExprVisitor;
 use crate::diagnostics::{DiagConfig, SourceMap};
@@ -36,11 +34,10 @@ fn test_expr(src: &[u8], dst: &[u8]) {
     let mut pp = PrettyPrinter::new();
     assert!(
         parser.parse_expr().map(|e| pp.visit_expr(&e)).is_some(),
-        "{} -> {:?}",
-        BStr::new(src),
+        "{:?}",
         tokens(src).map(|t| t.kind).collect::<Vec<_>>()
     );
-    assert_eq!(pp.display(), BStr::new(dst));
+    assert_eq!(pp.display().as_bytes(), dst);
 }
 
 #[test]
