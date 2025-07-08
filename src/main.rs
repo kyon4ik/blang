@@ -13,11 +13,18 @@ use clap::{Parser as _, ValueEnum};
 #[derive(clap::Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
+    /// Path to the b source file
     input: PathBuf,
+    /// Path to store object file
+    #[arg(short)]
+    output: Option<PathBuf>,
     /// Enable optimisations
     #[arg(short = 'O')]
     optimize: bool,
-    /// Print specified info to stdout
+    /// Specify the target  
+    #[arg(short, long, default_value_t = String::from("x86_64"))]
+    target: String,
+    /// Print info to stdout
     #[arg(long, value_enum, default_value_os_t)]
     print: PrintInfo,
     /// Maximal number of errors
@@ -51,12 +58,7 @@ fn main() {
     let mut parser = Parser::new(&src, diag.clone());
     let defs = parser.parse_program();
 
-    let mut module = Module::new(
-        "x86_64-unknown-linux-gnu",
-        &args.input,
-        args.optimize,
-        diag.clone(),
-    );
+    let mut module = Module::new(&args.target, &args.input, args.optimize, diag.clone());
     module.run_global_pass(&defs);
     module.run_local_pass(&defs, args.print == PrintInfo::Ir);
 
@@ -66,7 +68,7 @@ fn main() {
         match args.print {
             PrintInfo::None | PrintInfo::Ir => {}
             PrintInfo::Ast => {
-                let mut pp = PrettyPrinter::new();
+                let mut pp = PrettyPrinter::new(2);
                 for def in &defs {
                     pp.visit_def(def);
                 }
@@ -75,26 +77,20 @@ fn main() {
         }
 
         let obj = module.finish();
-        let mut out_path = args.input.clone();
-        out_path.set_extension("o");
-        println!("Create object file: {}", out_path.display());
-        let mut output = File::create(out_path).unwrap();
+        let out_path = args
+            .output
+            .unwrap_or_else(|| args.input.with_extension("o"));
+
+        let mut output = File::create(&out_path).unwrap();
         output.write_all(&obj.emit().unwrap()).unwrap();
+        println!(
+            "Compiled to '{}' [{}]",
+            out_path.display(),
+            if args.optimize {
+                "optimized"
+            } else {
+                "unoptimized"
+            }
+        );
     }
 }
-
-// fn print_tokens(src: Rc<[u8]>, tokens: &[Token], path: &Path) {
-//     let src_map = SourceMap::new(src, path);
-
-//     let mut prev_line = 0;
-//     for token in tokens {
-//         let (start_loc, end_loc) = src_map.locate_span(token.span).unwrap();
-//         assert_eq!(start_loc.line, end_loc.line);
-//         if prev_line != start_loc.line {
-//             println!("{:>3} | {}", start_loc.line, token.kind);
-//             prev_line = start_loc.line;
-//         } else {
-//             println!("     | {}", token.kind);
-//         }
-//     }
-// }

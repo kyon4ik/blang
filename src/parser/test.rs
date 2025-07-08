@@ -31,7 +31,7 @@ fn tokens(src: &[u8]) -> impl Iterator<Item = Token> {
 
 fn test_expr(src: &[u8], dst: &[u8]) {
     let mut parser = parser(src);
-    let mut pp = PrettyPrinter::new();
+    let mut pp = PrettyPrinter::new(0);
     assert!(
         parser.parse_expr().map(|e| pp.visit_expr(&e)).is_some(),
         "{:?}",
