@@ -11,3 +11,6 @@ indexmap = "2.10.0"
 rustc-hash = "2.1.1"
 strum = "0.27.1"
 strum_macros = "0.27.1"
+
+[[bin]]
+name = "comptest"
