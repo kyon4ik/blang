@@ -24,10 +24,12 @@ impl PrettyPrinter {
     }
 
     pub fn visit_def(&mut self, def: &DefAst) {
-        self.out.push_str(def.name.as_str());
+        self.out.push_str("______________________\n");
         match &def.kind {
             DefKind::Vector { size, list } => {
                 self.out.push_str("(vector ");
+                self.visit_name(&def.name);
+                self.out.push(' ');
                 self.visit_vecsize(size);
                 self.indepth += 1;
                 self.write_slice(list, Self::visit_immval);
@@ -35,7 +37,8 @@ impl PrettyPrinter {
                 self.indepth -= 1;
             }
             DefKind::Function { params, body } => {
-                self.out.push_str("(func");
+                self.out.push_str("(func ");
+                self.visit_name(&def.name);
                 self.indepth += 1;
                 self.write_slice(&params.params, Self::visit_name);
                 self.visit_stmt(body);
@@ -44,12 +47,13 @@ impl PrettyPrinter {
             }
         }
         self.out.push('\n');
+        self.out.push_str("\n\n");
     }
 
     fn visit_immval(&mut self, ival: &ImmVal) {
         match ival {
-            ImmVal::Const(_) => todo!(),
-            ImmVal::Name(_) => todo!(),
+            ImmVal::Const(lit) => self.visit_const(lit),
+            ImmVal::Name(name) => self.visit_name(name),
         }
     }
 
