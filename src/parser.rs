@@ -578,14 +578,10 @@ fn follows_expr(kind: TokenKind) -> bool {
         Name(_) |
         Literal(_) |
         OBrace |
-        OParen |
-        Star |
-        PlusPlus |
-        MinusMinus |
-        Minus |
-        Bang |
-        Amps
+        Bang
     )
+    // Can follow expr, but should be parsed
+    // Minus | Amps | OParen | Star | PlusPlus | MinusMinus
 }
 
 impl Parser<'_> {

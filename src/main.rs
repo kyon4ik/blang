@@ -2,6 +2,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::num::NonZeroU8;
 use std::path::PathBuf;
+use std::process;
 use std::rc::Rc;
 
 use blang::ast::print::PrettyPrinter;
@@ -64,6 +65,7 @@ fn main() {
 
     if diag.has_errors() {
         diag.print_errors().unwrap();
+        process::exit(1);
     } else {
         match args.print {
             PrintInfo::None | PrintInfo::Ir => {}
@@ -92,5 +94,6 @@ fn main() {
                 "unoptimized"
             }
         );
+        process::exit(0);
     }
 }

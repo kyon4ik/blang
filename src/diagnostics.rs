@@ -102,7 +102,7 @@ impl Diagnostics {
 
     pub fn print_errors(&self) -> std::io::Result<()> {
         for error in self.errors.borrow().iter() {
-            error.print(&self.source_map)?;
+            error.eprint(&self.source_map)?;
         }
         Ok(())
     }

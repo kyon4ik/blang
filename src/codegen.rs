@@ -867,7 +867,7 @@ impl StmtVisitor for Function<'_> {
                 .diag
                 .error(
                     case.case_span,
-                    "case statement must be enclosed be at least one switch statement",
+                    "case statement must be enclosed by at least one switch statement",
                 )
                 .finish();
         }
