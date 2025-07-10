@@ -9,6 +9,9 @@ use clap::Parser;
 struct Args {
     /// Path to the test or directory
     input: PathBuf,
+    /// Record output of test(s)
+    #[arg(long)]
+    record: bool,
     /// Compiler flags
     #[arg(last = true)]
     compiler_args: Vec<String>,
@@ -17,7 +20,10 @@ struct Args {
 fn main() {
     let args = Args::parse();
 
-    let compiler_path = build_compiler();
+    let package_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let project_dir = package_dir.parent().unwrap();
+    let compiler_path = project_dir.join("target/release/blang");
+    println!("Compiler: {}", compiler_path.display());
 
     if args.input.is_file() {
         let test_exe_path =
@@ -133,25 +139,6 @@ impl ProcessBarrier {
 
         self.statuses
     }
-}
-
-fn build_compiler() -> PathBuf {
-    let project_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let project_name = env!("CARGO_PKG_NAME");
-
-    let building_status = Command::new("cargo")
-        .args(["build", "--release"])
-        .status()
-        .expect("Building compiler");
-
-    if building_status.success() {
-        println!("Build compiler successfully.");
-    } else {
-        eprintln!("Failed to build compiler with status [{building_status}]");
-        process::exit(1);
-    }
-
-    project_dir.join(format!("target/release/{project_name}"))
 }
 
 enum Phase {

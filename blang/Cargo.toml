@@ -1,0 +1,13 @@
+[package]
+name = "blang"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ariadne = { version = "0.5.1", features = ["auto-color"] }
+clap = { version = "4.5.40", features = ["derive"] }
+cranelift = { version = "0.121.1", features = ["module", "object"] }
+indexmap = "2.10.0"
+rustc-hash = "2.1.1"
+strum = "0.27.1"
+strum_macros = "0.27.1"
