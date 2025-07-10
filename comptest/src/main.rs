@@ -1,10 +1,13 @@
 use std::ffi::OsStr;
-use std::fmt;
+use std::fs::{DirEntry, File};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
 use anstream::println;
 use clap::Parser;
+use comptest::runner::{ChildError, IntoTask, Runner, Task};
+use comptest::status::Status;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -19,58 +22,7 @@ struct Args {
     compiler_args: Vec<String>,
 }
 
-#[derive(Clone, Copy)]
-enum Status {
-    OK,
-    CF,
-    LF,
-    XX,
-}
-
-impl Status {
-    const fn all() -> &'static [Self] {
-        &[Self::OK, Self::CF, Self::LF, Self::XX]
-    }
-
-    const fn description(&self) -> &'static str {
-        match self {
-            Self::OK => "success",
-            Self::CF => "compilation failed",
-            Self::LF => "linking failed",
-            Self::XX => "system error",
-        }
-    }
-
-    fn style(&self) -> anstyle::Style {
-        let ansi = match self {
-            Status::OK => anstyle::AnsiColor::Green,
-            Status::CF => anstyle::AnsiColor::Red,
-            Status::LF => anstyle::AnsiColor::Magenta,
-            Status::XX => anstyle::AnsiColor::Cyan,
-        };
-        anstyle::Style::new()
-            .bold()
-            .fg_color(Some(anstyle::Color::Ansi(ansi)))
-    }
-
-    fn styled(&self) -> String {
-        format!("{}{}{}", self.style(), self, anstyle::Reset)
-    }
-}
-
-impl fmt::Display for Status {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            Status::OK => "OK",
-            Status::CF => "CF",
-            Status::LF => "LF",
-            Status::XX => "XX",
-        };
-        f.write_str(s)
-    }
-}
-
-fn main() {
+fn main() -> io::Result<()> {
     let args = Args::parse();
 
     let package_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -79,211 +31,169 @@ fn main() {
     println!("Compiler: {}", compiler_path.display());
 
     if args.input.is_file() {
-        let test_exe_path =
-            match compile_test_sync(&args.input, &compiler_path, &args.compiler_args) {
-                Ok(exe) => exe,
-                Err(Phase::Compilataion(output)) => {
-                    eprintln!("Test compilation failed [{}]:", output.status);
-                    eprintln!(
-                        "{}",
-                        String::from_utf8(output.stderr)
-                            .unwrap_or_else(|_| "Non UTF-8 output found.".to_string())
-                    );
-                    process::exit(1);
-                }
-                Err(Phase::Linking(output)) => {
-                    eprintln!("Test linking failed [{}]:", output.status);
-                    eprintln!(
-                        "{}",
-                        String::from_utf8(output.stdout)
-                            .unwrap_or_else(|_| "Non UTF-8 output found.".to_string())
-                    );
-                    process::exit(1);
-                }
-            };
-        run_test(&test_exe_path);
+        todo!("Single file run")
     } else if args.input.is_dir() {
-        let mut compiling = ProcessBarrier::default();
-        let mut linking = ProcessBarrier::default();
-        let mut tests = Vec::new();
-        for entry in args.input.read_dir().expect("Reading directory") {
-            let entry = entry.expect("Reading dir entry");
-            let entry_type = entry.file_type().unwrap();
-            let entry_path = entry.path();
-
-            if entry_type.is_file() && entry_path.extension().is_some_and(|ext| ext.eq("b")) {
-                let proc = compile_test_async(&entry_path, &compiler_path, &args.compiler_args);
-                compiling.add(proc);
-                tests.push(entry);
-            } else if entry_type.is_dir() {
-                println!("skipping directory {}", entry_path.display());
-            }
-        }
-        let comp_statuses = compiling.wait();
-        let mut compiled_tests = Vec::new();
-        for (status, entry) in comp_statuses.into_iter().zip(tests) {
-            if let Some(status) = status {
-                if status.success() {
-                    let proc = link_test_async(&entry.path());
-                    linking.add(proc);
-                    compiled_tests.push(entry);
-                } else {
-                    println!(
-                        "{:>30}: {}",
-                        entry.file_name().display(),
-                        Status::CF.styled()
-                    );
-                }
-            } else {
-                println!(
-                    "{:>30}: {}",
-                    entry.file_name().display(),
-                    Status::XX.styled()
-                );
-            }
-        }
-        let link_statuses = linking.wait();
-        for (status, entry) in link_statuses.into_iter().zip(compiled_tests) {
-            if let Some(status) = status {
-                if status.success() {
-                    println!(
-                        "{:>30}: {}",
-                        entry.file_name().display(),
-                        Status::OK.styled()
-                    );
-                } else {
-                    println!(
-                        "{:>30}: {}",
-                        entry.file_name().display(),
-                        Status::LF.styled()
-                    );
-                }
-            } else {
-                println!(
-                    "{:>30}: {}",
-                    entry.file_name().display(),
-                    Status::XX.styled()
-                );
-            }
-        }
-
         for status in Status::all() {
             println!("{} - {}", status.styled(), status.description());
+        }
+
+        let tests: Vec<_> = args
+            .input
+            .read_dir()?
+            .filter_map(Result::ok)
+            .filter(is_test_file)
+            .collect();
+
+        if args.record {
+            let mut runner = Runner::default();
+            for test in tests.iter() {
+                let test_path = test.path();
+                let compile = compile_test_cmd(&test_path, &compiler_path, &args.compiler_args);
+                let link = link_test_cmd(&test_path);
+                let run = run_test_cmd(&test_path);
+
+                runner.run(
+                    compile
+                        .into_task()
+                        .then(link)
+                        .then(run)
+                        .map(move |out| record_output(&test_path, out)),
+                );
+            }
+
+            let outputs = runner.wait();
+            for (output, test_file) in outputs.into_iter().zip(tests) {
+                println!(
+                    "{:>30}: {}",
+                    test_file.path().display(),
+                    output.unwrap_or(Status::XX).styled()
+                );
+            }
+        } else {
+            let mut runner = Runner::default();
+            for test in tests.iter() {
+                let test_path = test.path();
+                let compile = compile_test_cmd(&test_path, &compiler_path, &args.compiler_args);
+                let link = link_test_cmd(&test_path);
+                let run = run_test_cmd(&test_path);
+
+                runner.run(
+                    compile
+                        .into_task()
+                        .then(link)
+                        .then(run)
+                        .map(move |out| check_output(&test_path, out)),
+                );
+            }
+            let outputs = runner.wait();
+            let mut failed_count = 0;
+            let test_count = tests.len();
+            for (output, test_file) in outputs.into_iter().zip(tests) {
+                let status = output.unwrap_or(Status::XX);
+                failed_count += (status != Status::OK) as usize;
+                println!("{:>30}: {}", test_file.path().display(), status.styled());
+            }
+
+            if failed_count > 0 {
+                eprintln!("{failed_count} out of {test_count} tests failed");
+                process::exit(1);
+            }
         }
     } else {
         eprintln!("INPUT must be either file or directory");
         process::exit(1);
     }
+
+    Ok(())
 }
 
-#[derive(Default)]
-struct ProcessBarrier {
-    statuses: Vec<Option<process::ExitStatus>>,
-    children: Vec<(process::Child, usize)>,
-    counter: usize,
+fn is_test_file(entry: &DirEntry) -> bool {
+    let entry_type = entry.file_type().unwrap();
+    let entry_path = entry.path();
+    entry_type.is_file() && entry_path.extension().is_some_and(|ext| ext.eq("b"))
 }
 
-impl ProcessBarrier {
-    fn add(&mut self, child: process::Child) -> usize {
-        let child_id = self.counter;
-        self.children.push((child, child_id));
-        self.counter += 1;
-        child_id
-    }
-
-    fn wait(mut self) -> Vec<Option<process::ExitStatus>> {
-        self.statuses.resize(self.counter, None);
-        loop {
-            if self.children.is_empty() {
-                break;
-            }
-
-            self.children
-                .retain_mut(|(child, id)| match child.try_wait() {
-                    Ok(Some(status)) => {
-                        self.statuses[*id] = Some(status);
-                        false
-                    }
-                    Ok(None) => true,
-                    Err(_) => false,
-                });
-        }
-
-        self.statuses
-    }
-}
-
-enum Phase {
-    Compilataion(process::Output),
-    Linking(process::Output),
-}
-
-fn compile_test_sync<S: AsRef<OsStr>>(
+fn compile_test_cmd<S: AsRef<OsStr>>(
     test_path: &Path,
     compiler_path: &Path,
     comp_args: &[S],
-) -> Result<PathBuf, Phase> {
-    let comp_res = compile_test_async(test_path, compiler_path, comp_args)
-        .wait_with_output()
-        .expect("Waiting compilation");
-    if !comp_res.status.success() {
-        return Err(Phase::Compilataion(comp_res));
-    }
-
-    let link_res = link_test_async(test_path)
-        .wait_with_output()
-        .expect("Waiting linking");
-    if !link_res.status.success() {
-        return Err(Phase::Linking(link_res));
-    }
-
-    let test_exe = test_path.with_extension("");
-    Ok(test_exe)
-}
-
-fn compile_test_async<S: AsRef<OsStr>>(
-    test_path: &Path,
-    compiler_path: &Path,
-    comp_args: &[S],
-) -> process::Child {
+) -> process::Command {
     let test_obj = test_path.with_extension("o");
     let mut compile_cmd = Command::new(compiler_path);
     compile_cmd
         .arg("-o")
         .arg(test_obj.as_path())
         .arg(test_path)
-        .args(comp_args)
-        .stdout(process::Stdio::null())
-        .stderr(process::Stdio::null());
-
-    compile_cmd.spawn().expect("Compiling test")
+        .args(comp_args);
+    compile_cmd
 }
 
-fn link_test_async(test_path: &Path) -> process::Child {
+fn link_test_cmd(test_path: &Path) -> process::Command {
     let test_exe = test_path.with_extension("");
     let test_obj = test_path.with_extension("o");
     let mut link_cmd = Command::new("gcc");
     link_cmd
         .arg("-o")
         .arg(test_exe.as_path())
-        .arg(test_obj.as_path())
-        .stderr(process::Stdio::null());
-
-    link_cmd.spawn().expect("Linking test")
+        .arg(test_obj.as_path());
+    link_cmd
 }
 
-fn run_test(test_exe_path: &Path) {
-    let test_res = Command::new(test_exe_path).output().expect("Running test");
-    println!("Test stdout:");
-    println!(
-        "{}",
-        String::from_utf8(test_res.stdout)
-            .unwrap_or_else(|_| "Non UTF-8 output found.".to_string())
-    );
-    println!("Test stderr:");
-    println!(
-        "{}",
-        String::from_utf8(test_res.stderr)
-            .unwrap_or_else(|_| "Non UTF-8 output found.".to_string())
-    );
+fn run_test_cmd(test_path: &Path) -> process::Command {
+    let test_exe_path = test_path.with_extension("");
+    Command::new(test_exe_path)
+}
+
+fn check_output(test_path: &Path, output: Result<Vec<u8>, ChildError>) -> Status {
+    let expect_path = test_path.with_extension("output");
+    let mut expect_file = BufReader::new(File::open(expect_path).expect("Opening output file"));
+
+    let mut status_str = String::new();
+    expect_file.read_line(&mut status_str).unwrap();
+    let expected_status = status_str
+        .trim_end_matches('\n')
+        .parse::<Status>()
+        .expect("Parsing status");
+    let mut expected_output = Vec::new();
+    expect_file.read_to_end(&mut expected_output).unwrap();
+    let (status, output) = match output {
+        Ok(stdout) => (Status::OK, stdout),
+        Err(err) => match err {
+            ChildError::Fail { stderr, .. } => (Status::CF, stderr),
+            ChildError::Io(_) => (Status::XX, vec![]),
+        },
+    };
+    if status == expected_status && output == expected_output {
+        Status::OK
+    } else {
+        status
+    }
+}
+
+fn record_output(test_path: &Path, output: Result<Vec<u8>, ChildError>) -> Status {
+    let output_path = test_path.with_extension("output");
+    let mut output_file = File::create(output_path).expect("Creating output file");
+
+    match output {
+        Ok(stdout) => {
+            writeln!(output_file, "{}", Status::OK).unwrap();
+            output_file
+                .write_all(&stdout)
+                .expect("Writing to output file");
+            Status::OK
+        }
+        Err(err) => match err {
+            ChildError::Fail { stderr, .. } => {
+                writeln!(output_file, "{}", Status::CF).unwrap();
+                output_file
+                    .write_all(&stderr)
+                    .expect("Writing to output file");
+                Status::CF
+            }
+            ChildError::Io(e) => {
+                eprintln!("IO error on test {}: {}", test_path.display(), e);
+                Status::XX
+            }
+        },
+    }
 }
