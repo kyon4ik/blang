@@ -1,7 +1,9 @@
 use std::ffi::OsStr;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
+use anstream::println;
 use clap::Parser;
 
 #[derive(Parser)]
@@ -15,6 +17,57 @@ struct Args {
     /// Compiler flags
     #[arg(last = true)]
     compiler_args: Vec<String>,
+}
+
+#[derive(Clone, Copy)]
+enum Status {
+    OK,
+    CF,
+    LF,
+    XX,
+}
+
+impl Status {
+    const fn all() -> &'static [Self] {
+        &[Self::OK, Self::CF, Self::LF, Self::XX]
+    }
+
+    const fn description(&self) -> &'static str {
+        match self {
+            Self::OK => "success",
+            Self::CF => "compilation failed",
+            Self::LF => "linking failed",
+            Self::XX => "system error",
+        }
+    }
+
+    fn style(&self) -> anstyle::Style {
+        let ansi = match self {
+            Status::OK => anstyle::AnsiColor::Green,
+            Status::CF => anstyle::AnsiColor::Red,
+            Status::LF => anstyle::AnsiColor::Magenta,
+            Status::XX => anstyle::AnsiColor::Cyan,
+        };
+        anstyle::Style::new()
+            .bold()
+            .fg_color(Some(anstyle::Color::Ansi(ansi)))
+    }
+
+    fn styled(&self) -> String {
+        format!("{}{}{}", self.style(), self, anstyle::Reset)
+    }
+}
+
+impl fmt::Display for Status {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Status::OK => "OK",
+            Status::CF => "CF",
+            Status::LF => "LF",
+            Status::XX => "XX",
+        };
+        f.write_str(s)
+    }
 }
 
 fn main() {
@@ -75,29 +128,48 @@ fn main() {
                     linking.add(proc);
                     compiled_tests.push(entry);
                 } else {
-                    println!("{:>30}: CF", entry.file_name().display());
+                    println!(
+                        "{:>30}: {}",
+                        entry.file_name().display(),
+                        Status::CF.styled()
+                    );
                 }
             } else {
-                println!("{:>30}: XX", entry.file_name().display());
+                println!(
+                    "{:>30}: {}",
+                    entry.file_name().display(),
+                    Status::XX.styled()
+                );
             }
         }
         let link_statuses = linking.wait();
         for (status, entry) in link_statuses.into_iter().zip(compiled_tests) {
             if let Some(status) = status {
                 if status.success() {
-                    println!("{:>30}: OK", entry.file_name().display());
+                    println!(
+                        "{:>30}: {}",
+                        entry.file_name().display(),
+                        Status::OK.styled()
+                    );
                 } else {
-                    println!("{:>30}: LF", entry.file_name().display());
+                    println!(
+                        "{:>30}: {}",
+                        entry.file_name().display(),
+                        Status::LF.styled()
+                    );
                 }
             } else {
-                println!("{:>30}: XX", entry.file_name().display());
+                println!(
+                    "{:>30}: {}",
+                    entry.file_name().display(),
+                    Status::XX.styled()
+                );
             }
         }
 
-        println!("OK - success");
-        println!("CF - compilation failed");
-        println!("LF - linking failed");
-        println!("XX - system error")
+        for status in Status::all() {
+            println!("{} - {}", status.styled(), status.description());
+        }
     } else {
         eprintln!("INPUT must be either file or directory");
         process::exit(1);
