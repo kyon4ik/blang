@@ -1,0 +1,16 @@
+CF
+Error: case constant must be integer or char literal
+   ╭─[ tests/bad_case.b:5:14 ]
+   │
+ 5 │         case "hello":
+───╯
+Error: unknown escape symbol
+   ╭─[ tests/bad_case.b:6:14 ]
+   │
+ 6 │         case '*c': main(2, 1);
+───╯
+Error: case statement must be enclosed by at least one switch statement
+    ╭─[ tests/bad_case.b:10:5 ]
+    │
+ 10 │     case 1: case 69: main(a, a);
+────╯

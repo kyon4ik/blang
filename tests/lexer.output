@@ -1,0 +1,11 @@
+CF
+Error: unexpected token 'Slash', expected name
+   ╭─[ tests/lexer.b:2:1 ]
+   │
+ 2 │ // C++ comment
+───╯
+Error: unexpected token 'Name', expected any of CParen, Comma
+    ╭─[ tests/lexer.b:18:19 ]
+    │
+ 18 │     assert_equal(0x45, 69, "0x45 == 69");
+────╯

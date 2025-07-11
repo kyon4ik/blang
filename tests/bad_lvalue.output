@@ -1,0 +1,15 @@
+CF
+Error: left operand of assignment must be lvalue
+   ╭─[ tests/bad_lvalue.b:3:8 ]
+   │
+ 3 │     10 =+ 10;
+   │     ─┬ ──  
+   │      ╰───── found rvalue
+───╯
+Error: '&' expects lvalue as operand
+   ╭─[ tests/bad_lvalue.b:4:11 ]
+   │
+ 4 │     b = ++&a--;
+   │             │   
+   │             ╰─── found rvalue
+───╯

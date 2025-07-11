@@ -1,0 +1,15 @@
+CF
+Error: redefinition of global name 'here'
+   ╭─[ tests/bad_label.b:9:1 ]
+   │
+ 1 │ here[];
+   │ ──┬─  
+   │   ╰─── first defined here
+   │ 
+ 9 │ here() {
+───╯
+Error: undefined label 'smth'
+   ╭─[ tests/bad_label.b:6:10 ]
+   │
+ 6 │     goto smth;
+───╯
