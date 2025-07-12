@@ -1,19 +1,19 @@
 use std::ffi::OsStr;
-use std::fs::{DirEntry, File};
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::fs::{self, DirEntry};
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
-use anstream::println;
+use anstyle::{AnsiColor, Color, Style};
 use clap::Parser;
-use comptest::runner::{ChildError, IntoTask, Runner, Task};
-use comptest::status::Status;
+use comptest::checker::{TestResult, TestStatus};
+use comptest::runner::{RunStatus, Test, TestRunner, TestStage, TestStager};
+use comptest::{checker, recorder};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Args {
-    /// Path to the test or directory
-    input: PathBuf,
+    /// Path to the test file or directory
+    tests: PathBuf,
     /// Record output of test(s)
     #[arg(long)]
     record: bool,
@@ -22,178 +22,174 @@ struct Args {
     compiler_args: Vec<String>,
 }
 
-fn main() -> io::Result<()> {
+fn main() {
     let args = Args::parse();
 
     let package_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let project_dir = package_dir.parent().unwrap();
     let compiler_path = project_dir.join("target/release/blang");
-    println!("Compiler: {}", compiler_path.display());
 
-    if args.input.is_file() {
-        todo!("Single file run")
-    } else if args.input.is_dir() {
-        for status in Status::all() {
-            println!("{} - {}", status.styled(), status.description());
+    let test_suite_path = &args.tests;
+    let test_suite_meta = fs::metadata(test_suite_path).unwrap();
+    let test_suite_type = test_suite_meta.file_type();
+
+    if test_suite_type.is_file() {
+        let stp = LoudStager::new(&compiler_path, &args.compiler_args);
+        if args.record {
+            let mut runner = TestRunner::new(stp, recorder::mapper_long);
+            let output = runner.run(Test::new(test_suite_path));
+            println!("{output}");
+        } else {
+            let mut runner = TestRunner::new(stp, checker::mapper_long);
+            let result = runner.run(Test::new(test_suite_path));
+            print_test_result(test_suite_path, &result);
+            if result.status() != TestStatus::Ok {
+                process::exit(1);
+            }
         }
-
-        let tests: Vec<_> = args
-            .input
-            .read_dir()?
+    } else if test_suite_type.is_dir() {
+        let stp = QuietStager::new(&compiler_path, &args.compiler_args);
+        let tests: Vec<PathBuf> = test_suite_path
+            .read_dir()
+            .unwrap()
             .filter_map(Result::ok)
-            .filter(is_test_file)
+            .filter(is_b_src_file)
+            .map(|entry| entry.path())
             .collect();
 
         if args.record {
-            let mut runner = Runner::default();
-            for test in tests.iter() {
-                let test_path = test.path();
-                let compile = compile_test_cmd(&test_path, &compiler_path, &args.compiler_args);
-                let link = link_test_cmd(&test_path);
-                let run = run_test_cmd(&test_path);
-
-                runner.run(
-                    compile
-                        .into_task()
-                        .then(link)
-                        .then(run)
-                        .map(move |out| record_output(&test_path, out)),
-                );
+            let mut runner = TestRunner::new(stp, recorder::mapper_short);
+            for test_path in &tests {
+                runner.submit(Test::new(test_path));
             }
-
-            let outputs = runner.wait();
-            for (output, test_file) in outputs.into_iter().zip(tests) {
-                println!(
-                    "{:>30}: {}",
-                    test_file.path().display(),
-                    output.unwrap_or(Status::XX).styled()
-                );
+            let run_statuses = runner.wait();
+            for (test_path, run_status) in tests.iter().zip(run_statuses) {
+                print_run_status(test_path, run_status);
             }
         } else {
-            let mut runner = Runner::default();
-            for test in tests.iter() {
-                let test_path = test.path();
-                let compile = compile_test_cmd(&test_path, &compiler_path, &args.compiler_args);
-                let link = link_test_cmd(&test_path);
-                let run = run_test_cmd(&test_path);
-
-                runner.run(
-                    compile
-                        .into_task()
-                        .then(link)
-                        .then(run)
-                        .map(move |out| check_output(&test_path, out)),
-                );
+            let mut runner = TestRunner::new(stp, checker::mapper_short);
+            for test_path in &tests {
+                runner.submit(Test::new(test_path));
             }
-            let outputs = runner.wait();
-            let mut failed_count = 0;
-            let test_count = tests.len();
-            for (output, test_file) in outputs.into_iter().zip(tests) {
-                let status = output.unwrap_or(Status::XX);
-                failed_count += (status != Status::OK) as usize;
-                println!("{:>30}: {}", test_file.path().display(), status.styled());
+            let statuses = runner.wait();
+            let tests_count = tests.len();
+            let mut failed_tests_count = 0;
+            for (test_path, status) in tests.iter().zip(statuses) {
+                print_test_status(test_path, status);
+                if status == TestStatus::Fail {
+                    failed_tests_count += 1;
+                }
             }
-
-            if failed_count > 0 {
-                eprintln!("{failed_count} out of {test_count} tests failed");
+            if failed_tests_count > 0 {
+                println!("{failed_tests_count} out of {tests_count} tests failed.");
                 process::exit(1);
             }
         }
     } else {
-        eprintln!("INPUT must be either file or directory");
+        println!("'{}' is not a file or directory", test_suite_path.display());
         process::exit(1);
     }
-
-    Ok(())
 }
 
-fn is_test_file(entry: &DirEntry) -> bool {
+struct QuietStager<'c, 'a> {
+    compiler_path: &'c Path,
+    compiler_args: &'a [String],
+}
+
+struct LoudStager<'c, 'a> {
+    compiler_path: &'c Path,
+    compiler_args: &'a [String],
+}
+
+impl<'c, 'a> QuietStager<'c, 'a> {
+    pub fn new(compiler_path: &'c Path, compiler_args: &'a [String]) -> Self {
+        Self {
+            compiler_path,
+            compiler_args,
+        }
+    }
+}
+impl<'c, 'a> LoudStager<'c, 'a> {
+    pub fn new(compiler_path: &'c Path, compiler_args: &'a [String]) -> Self {
+        Self {
+            compiler_path,
+            compiler_args,
+        }
+    }
+}
+
+impl TestStager for QuietStager<'_, '_> {
+    fn create(&self, stage: TestStage, test_path: &Path) -> Command {
+        match stage {
+            TestStage::Compiling => compile_cmd(test_path, self.compiler_path, self.compiler_args),
+            TestStage::Running => Command::new(test_path.with_extension("")),
+        }
+    }
+}
+
+impl TestStager for LoudStager<'_, '_> {
+    fn create(&self, stage: TestStage, test_path: &Path) -> Command {
+        match stage {
+            TestStage::Compiling => {
+                let cmd = compile_cmd(test_path, self.compiler_path, self.compiler_args);
+                print_command(&cmd);
+                cmd
+            }
+            TestStage::Running => {
+                let cmd = Command::new(test_path.with_extension(""));
+                print_command(&cmd);
+                cmd
+            }
+        }
+    }
+}
+
+fn is_b_src_file(entry: &DirEntry) -> bool {
     let entry_type = entry.file_type().unwrap();
     let entry_path = entry.path();
     entry_type.is_file() && entry_path.extension().is_some_and(|ext| ext.eq("b"))
 }
 
-fn compile_test_cmd<S: AsRef<OsStr>>(
+fn print_command(cmd: &Command) {
+    print!(
+        "{}Running{} {}",
+        Style::new().fg_color(Some(Color::Ansi(AnsiColor::Magenta))),
+        anstyle::Reset,
+        cmd.get_program().display()
+    );
+    for arg in cmd.get_args() {
+        print!(" {}", arg.display());
+    }
+    println!();
+}
+
+fn print_test_result(test_path: &Path, result: &TestResult) {
+    print_test_status(test_path, result.status());
+    match result {
+        TestResult::Ok => println!("Test passed."),
+        TestResult::Fail(fail_reason) => println!("Test failed due to:\n{fail_reason}"),
+    }
+}
+
+fn print_run_status(test_path: &Path, run_status: RunStatus) {
+    println!("{} - {}", test_path.display(), run_status);
+}
+
+fn print_test_status(test_path: &Path, status: TestStatus) {
+    println!("{} - {}", test_path.display(), status);
+}
+
+fn compile_cmd<S: AsRef<OsStr>>(
     test_path: &Path,
     compiler_path: &Path,
     comp_args: &[S],
 ) -> process::Command {
-    let test_obj = test_path.with_extension("o");
+    let test_exe_path = test_path.with_extension("");
     let mut compile_cmd = Command::new(compiler_path);
     compile_cmd
         .arg("-o")
-        .arg(test_obj.as_path())
+        .arg(test_exe_path)
         .arg(test_path)
         .args(comp_args);
     compile_cmd
-}
-
-fn link_test_cmd(test_path: &Path) -> process::Command {
-    let test_exe = test_path.with_extension("");
-    let test_obj = test_path.with_extension("o");
-    let mut link_cmd = Command::new("gcc");
-    link_cmd
-        .arg("-o")
-        .arg(test_exe.as_path())
-        .arg(test_obj.as_path());
-    link_cmd
-}
-
-fn run_test_cmd(test_path: &Path) -> process::Command {
-    let test_exe_path = test_path.with_extension("");
-    Command::new(test_exe_path)
-}
-
-fn check_output(test_path: &Path, output: Result<Vec<u8>, ChildError>) -> Status {
-    let expect_path = test_path.with_extension("output");
-    let mut expect_file = BufReader::new(File::open(expect_path).expect("Opening output file"));
-
-    let mut status_str = String::new();
-    expect_file.read_line(&mut status_str).unwrap();
-    let expected_status = status_str
-        .trim_end_matches('\n')
-        .parse::<Status>()
-        .expect("Parsing status");
-    let mut expected_output = Vec::new();
-    expect_file.read_to_end(&mut expected_output).unwrap();
-    let (status, output) = match output {
-        Ok(stdout) => (Status::OK, stdout),
-        Err(err) => match err {
-            ChildError::Fail { stderr, .. } => (Status::CF, stderr),
-            ChildError::Io(_) => (Status::XX, vec![]),
-        },
-    };
-    if status == expected_status && output == expected_output {
-        Status::OK
-    } else {
-        status
-    }
-}
-
-fn record_output(test_path: &Path, output: Result<Vec<u8>, ChildError>) -> Status {
-    let output_path = test_path.with_extension("output");
-    let mut output_file = File::create(output_path).expect("Creating output file");
-
-    match output {
-        Ok(stdout) => {
-            writeln!(output_file, "{}", Status::OK).unwrap();
-            output_file
-                .write_all(&stdout)
-                .expect("Writing to output file");
-            Status::OK
-        }
-        Err(err) => match err {
-            ChildError::Fail { stderr, .. } => {
-                writeln!(output_file, "{}", Status::CF).unwrap();
-                output_file
-                    .write_all(&stderr)
-                    .expect("Writing to output file");
-                Status::CF
-            }
-            ChildError::Io(e) => {
-                eprintln!("IO error on test {}: {}", test_path.display(), e);
-                Status::XX
-            }
-        },
-    }
 }

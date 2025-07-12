@@ -1,193 +1,280 @@
-use std::io::{self, Read};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::fmt;
+use std::io::{Read, Write};
+use std::path::Path;
+use std::process::{Child, Command, Stdio};
 
-pub enum Poll<T> {
-    Ready(T),
-    Pending,
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum RunStatus {
+    #[default]
+    CompileError,
+    RuntimeError,
+    Success,
 }
 
-pub struct Runner<T: Task> {
-    tasks: Vec<(T, usize)>,
-    outputs: Vec<Option<<T as Task>::Output>>,
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TestStage {
+    Compiling,
+    Running,
 }
 
-impl<T: Task> Default for Runner<T> {
-    fn default() -> Self {
+struct ActiveStage {
+    proc: Child,
+    stage: TestStage,
+}
+
+pub struct Test<'path> {
+    id: usize,
+    path: &'path Path,
+    active_stage: Option<ActiveStage>,
+}
+
+pub struct TestRunner<'p, S, M, R> {
+    stager: S,
+    out_map: M,
+    active_tests: Vec<Test<'p>>,
+    results: Vec<R>,
+}
+
+#[derive(PartialEq, Eq, Default)]
+pub struct TestOutput {
+    pub run_status: RunStatus,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+pub trait TestStager {
+    fn create(&self, stage: TestStage, test_path: &Path) -> Command;
+
+    fn create_piped(&self, stage: TestStage, test_path: &Path) -> Command {
+        let mut cmd = self.create(stage, test_path);
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd
+    }
+}
+
+impl<'p, S, M, R> TestRunner<'p, S, M, R>
+where
+    R: Default,
+    M: Fn(&Path, TestOutput) -> R,
+    S: TestStager,
+{
+    pub fn new(stager: S, out_map: M) -> Self {
         Self {
-            tasks: Vec::new(),
-            outputs: Vec::new(),
+            stager,
+            out_map,
+            active_tests: vec![],
+            results: vec![],
         }
     }
-}
 
-impl<T: Task> Runner<T> {
-    pub fn run(&mut self, task: impl IntoTask<IntoTask = T>) -> usize {
-        let task_id = self.tasks.len();
-        self.tasks.push((task.into_task(), task_id));
-        task_id
+    pub fn run(&mut self, mut test: Test) -> R {
+        loop {
+            if let Some(output) = test.run(&self.stager, test.path) {
+                return (self.out_map)(test.path, output);
+            }
+        }
     }
 
-    pub fn wait(mut self) -> Vec<Option<<T as Task>::Output>> {
-        self.outputs.resize_with(self.tasks.len(), || None);
+    pub fn submit(&mut self, mut test: Test<'p>) {
+        test.id = self.active_tests.len();
+        self.active_tests.push(test);
+    }
+
+    pub fn wait(mut self) -> Vec<R> {
+        self.results
+            .resize_with(self.active_tests.len(), Default::default);
         loop {
-            if self.tasks.is_empty() {
+            if self.active_tests.is_empty() {
                 break;
             }
 
-            self.tasks.retain_mut(|(task, id)| match task.poll() {
-                Poll::Ready(output) => {
-                    self.outputs[*id] = Some(output);
-                    false
-                }
-                Poll::Pending => true,
-            });
-        }
-
-        self.outputs
-    }
-}
-
-pub trait Task: Sized {
-    type Output;
-
-    fn poll(&mut self) -> Poll<Self::Output>;
-
-    fn map<U, F>(self, f: F) -> MapTask<Self, F>
-    where
-        F: Fn(Self::Output) -> U,
-    {
-        MapTask { task: self, map: f }
-    }
-
-    fn then<N>(self, next: N) -> ThenTask<Self, N>
-    where
-        N: IntoTask,
-    {
-        ThenTask {
-            task: Either::First(self),
-            next: Some(next),
-        }
-    }
-}
-
-pub trait IntoTask {
-    type Output;
-    type IntoTask: Task<Output = Self::Output>;
-
-    fn into_task(self) -> Self::IntoTask;
-}
-
-impl IntoTask for Command {
-    type Output = Result<Vec<u8>, ChildError>;
-
-    type IntoTask = Child;
-
-    fn into_task(mut self) -> Self::IntoTask {
-        match self.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
-            Ok(task) => task,
-            Err(err) => panic!(
-                "Into task for \"{}\" failed: {err}",
-                self.get_program().display()
-            ),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum ChildError {
-    Fail { status: ExitStatus, stderr: Vec<u8> },
-    Io(io::Error),
-}
-
-impl Task for Child {
-    type Output = Result<Vec<u8>, ChildError>;
-
-    fn poll(&mut self) -> Poll<Self::Output> {
-        match self.try_wait() {
-            Ok(Some(status)) => {
-                let mut out = Vec::new();
-                if status.success() {
-                    self.stdout
-                        .take()
-                        .map(|mut stdout| stdout.read_to_end(&mut out));
-                    Poll::Ready(Ok(out))
-                } else {
-                    self.stderr
-                        .take()
-                        .map(|mut stderr| stderr.read_to_end(&mut out));
-                    Poll::Ready(Err(ChildError::Fail {
-                        status,
-                        stderr: out,
-                    }))
-                }
-            }
-            Err(err) => Poll::Ready(Err(ChildError::Io(err))),
-            Ok(None) => Poll::Pending,
-        }
-    }
-}
-
-pub struct MapTask<T, F> {
-    task: T,
-    map: F,
-}
-
-impl<T, F, U> Task for MapTask<T, F>
-where
-    T: Task,
-    F: Fn(T::Output) -> U,
-{
-    type Output = U;
-
-    fn poll(&mut self) -> Poll<Self::Output> {
-        match self.task.poll() {
-            Poll::Ready(t) => Poll::Ready((self.map)(t)),
-            Poll::Pending => Poll::Pending,
-        }
-    }
-}
-
-pub enum Either<T, U> {
-    First(T),
-    Second(U),
-}
-
-pub struct ThenTask<T, N: IntoTask> {
-    task: Either<T, N::IntoTask>,
-    next: Option<N>,
-}
-
-impl<T, N, X, Y, E> Task for ThenTask<T, N>
-where
-    T: Task<Output = Result<X, E>>,
-    N: IntoTask<Output = Result<Y, E>>,
-{
-    type Output = Result<Y, E>;
-
-    fn poll(&mut self) -> Poll<Self::Output> {
-        match &mut self.task {
-            Either::First(t1) => match t1.poll() {
-                Poll::Ready(res) => match res {
-                    Ok(_) => {
-                        self.task = Either::Second(self.next.take().unwrap().into_task());
-                        Poll::Pending
+            self.active_tests
+                .retain_mut(|test| match test.run(&self.stager, test.path) {
+                    Some(output) => {
+                        self.results[test.id] = (self.out_map)(test.path, output);
+                        false
                     }
-                    Err(e) => Poll::Ready(Err(e)),
-                },
-                Poll::Pending => Poll::Pending,
+                    None => true,
+                });
+        }
+
+        self.results
+    }
+}
+
+impl<'p> Test<'p> {
+    pub fn new(path: &'p Path) -> Self {
+        Self {
+            id: 0,
+            path,
+            active_stage: None,
+        }
+    }
+
+    fn run<S>(&mut self, stager: &S, path: &'p Path) -> Option<TestOutput>
+    where
+        S: TestStager,
+    {
+        match &mut self.active_stage {
+            Some(active) => match active.proc.try_wait().unwrap() {
+                Some(status) => {
+                    if status.success() {
+                        if let Some(next_stage) = active.stage.next() {
+                            active.proc = stager.create_piped(next_stage, path).spawn().unwrap();
+                            active.stage = next_stage;
+                            None
+                        } else {
+                            Some(TestOutput::success(active))
+                        }
+                    } else {
+                        Some(TestOutput::failure(active))
+                    }
+                }
+                None => None,
             },
-            Either::Second(t2) => t2.poll(),
+            None => {
+                let stage = TestStage::first();
+                let proc = stager.create_piped(stage, self.path).spawn().unwrap();
+                self.active_stage = Some(ActiveStage::new(stage, proc));
+                None
+            }
         }
     }
 }
 
-impl<T: Task> IntoTask for T {
-    type Output = T::Output;
+fn split_once(bytes: &[u8], byte: u8) -> Option<(&[u8], &[u8])> {
+    let pos = bytes.iter().position(|c| *c == byte)?;
+    Some((&bytes[..pos], &bytes[pos + 1..]))
+}
 
-    type IntoTask = T;
+impl fmt::Display for TestOutput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Run status: {}", self.run_status)?;
+        writeln!(f, "Stdout:\n{}", String::from_utf8_lossy(&self.stdout))?;
+        writeln!(f, "Stderr:\n{}", String::from_utf8_lossy(&self.stderr))
+    }
+}
 
-    #[inline]
-    fn into_task(self) -> Self::IntoTask {
-        self
+impl TestOutput {
+    pub fn into_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&self.run_status.into_bytes());
+        bytes.push(b'\n');
+        writeln!(bytes, "STDOUT [{}B]:", self.stdout.len()).unwrap();
+        bytes.extend_from_slice(&self.stdout);
+        bytes.push(b'\n');
+        writeln!(bytes, "STDERR [{}B]:", self.stderr.len()).unwrap();
+        bytes.extend_from_slice(&self.stderr);
+        bytes.push(b'\n');
+        bytes
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        // run_status
+        let (rs, bytes) = bytes.split_first_chunk()?;
+        let run_status = RunStatus::from_bytes(*rs)?;
+        let bytes = bytes.strip_prefix(b"\n")?;
+        // STDOUT
+        let (num, bytes) = split_once(bytes.strip_prefix(b"STDOUT [")?, b'B')?;
+        let stdout_len = str::from_utf8(num).ok()?.parse::<usize>().ok()?;
+        let bytes = bytes.strip_prefix(b"]:\n")?;
+        let (stdout, bytes) = bytes.split_at_checked(stdout_len)?;
+        let bytes = bytes.strip_prefix(b"\n")?;
+        // STDERR
+        let (num, bytes) = split_once(bytes.strip_prefix(b"STDERR [")?, b'B')?;
+        let stderr_len = str::from_utf8(num).ok()?.parse::<usize>().ok()?;
+        let bytes = bytes.strip_prefix(b"]:\n")?;
+        let (stderr, bytes) = bytes.split_at_checked(stderr_len)?;
+        let _bytes = bytes.strip_prefix(b"\n")?;
+        Some(TestOutput {
+            run_status,
+            stdout: stdout.to_vec(),
+            stderr: stderr.to_vec(),
+        })
+    }
+
+    fn success(active: &mut ActiveStage) -> Self {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut out = active.proc.stdout.take().unwrap();
+        let mut err = active.proc.stderr.take().unwrap();
+
+        out.read_to_end(&mut stdout).unwrap();
+        err.read_to_end(&mut stderr).unwrap();
+
+        Self {
+            run_status: RunStatus::Success,
+            stdout,
+            stderr,
+        }
+    }
+
+    fn failure(active: &mut ActiveStage) -> Self {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut out = active.proc.stdout.take().unwrap();
+        let mut err = active.proc.stderr.take().unwrap();
+
+        out.read_to_end(&mut stdout).unwrap();
+        err.read_to_end(&mut stderr).unwrap();
+
+        let run_status = match active.stage {
+            TestStage::Compiling => RunStatus::CompileError,
+            TestStage::Running => RunStatus::RuntimeError,
+        };
+        Self {
+            run_status,
+            stdout,
+            stderr,
+        }
+    }
+}
+
+impl ActiveStage {
+    fn new(stage: TestStage, proc: Child) -> Self {
+        Self { stage, proc }
+    }
+}
+
+impl TestStage {
+    pub fn next(&self) -> Option<TestStage> {
+        match self {
+            TestStage::Compiling => Some(Self::Running),
+            TestStage::Running => None,
+        }
+    }
+
+    pub fn first() -> Self {
+        Self::Compiling
+    }
+}
+
+impl RunStatus {
+    pub fn from_bytes(bytes: [u8; 2]) -> Option<Self> {
+        match &bytes {
+            b"CE" => Some(Self::CompileError),
+            b"RE" => Some(Self::RuntimeError),
+            b"OK" => Some(Self::Success),
+            _ => None,
+        }
+    }
+
+    pub fn into_bytes(&self) -> [u8; 2] {
+        *match self {
+            RunStatus::CompileError => b"CE",
+            RunStatus::RuntimeError => b"RE",
+            RunStatus::Success => b"OK",
+        }
+    }
+}
+
+impl fmt::Display for RunStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let str = match self {
+            Self::CompileError => "compilation error (CE)",
+            Self::RuntimeError => "runtime error (RE)",
+            Self::Success => "success (OK)",
+        };
+        f.write_str(str)
     }
 }

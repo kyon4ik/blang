@@ -1,4 +1,8 @@
 OK
+STDOUT [97B]:
 Testing how well passing 11 arguments to a function we defined works.
 Expected output is `23`
 23
+
+STDERR [0B]:
+

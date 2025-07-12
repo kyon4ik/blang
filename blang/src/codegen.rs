@@ -7,13 +7,11 @@ use crate::diagnostics::{Diagnostics, Span};
 use crate::lexer::interner::InternedStr;
 use crate::lexer::token::{BinOpKind, LiteralKind};
 
-use cranelift::codegen::ir as clir;
-use cranelift::codegen::{self as clb, settings::Configurable as _};
-use cranelift::frontend as clf;
-use cranelift::module::{self as clm, Module as _};
-use cranelift::object as clo;
-use cranelift::prelude::InstBuilder;
-use cranelift::prelude::isa::OwnedTargetIsa;
+use cranelift_codegen::ir::{self as clir, InstBuilder as _};
+use cranelift_codegen::{self as clb, settings::Configurable as _};
+use cranelift_frontend as clf;
+use cranelift_module::{self as clm, Module as _};
+use cranelift_object as clo;
 use rustc_hash::FxHashMap;
 
 pub struct Module {
@@ -55,7 +53,7 @@ struct GlobalInfo {
 }
 
 impl Context {
-    pub fn new(isa: OwnedTargetIsa, path: &Path, diag: Rc<Diagnostics>) -> Self {
+    pub fn new(isa: clb::isa::OwnedTargetIsa, path: &Path, diag: Rc<Diagnostics>) -> Self {
         let word_type = isa.pointer_type();
         let builder = clo::ObjectBuilder::new(
             isa,

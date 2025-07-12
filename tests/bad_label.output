@@ -1,4 +1,7 @@
-CF
+CE
+STDOUT [0B]:
+
+STDERR [307B]:
 Error: redefinition of global name 'here'
    ╭─[ tests/bad_label.b:9:1 ]
    │
@@ -13,3 +16,4 @@ Error: undefined label 'smth'
    │
  6 │     goto smth;
 ───╯
+

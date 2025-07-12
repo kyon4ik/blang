@@ -1,4 +1,7 @@
-CF
+CE
+STDOUT [0B]:
+
+STDERR [432B]:
 Error: case constant must be integer or char literal
    ╭─[ tests/bad_case.b:5:14 ]
    │
@@ -14,3 +17,4 @@ Error: case statement must be enclosed by at least one switch statement
     │
  10 │     case 1: case 69: main(a, a);
 ────╯
+

@@ -1,8 +1,8 @@
-use std::fs::File;
-use std::io::{Read, Write};
+use std::fs::{self, File};
+use std::io::{self, Read, Write};
 use std::num::NonZeroU8;
 use std::path::PathBuf;
-use std::process;
+use std::process::{self, Command};
 use std::rc::Rc;
 
 use blang::ast::print::PrettyPrinter;
@@ -19,12 +19,18 @@ struct Args {
     /// Path to store object file
     #[arg(short)]
     output: Option<PathBuf>,
-    /// Enable optimisations
+    /// Enable optimizations
     #[arg(short = 'O')]
     optimize: bool,
+    /// Compile, without linking
+    #[arg(short = 'c')]
+    only_compile: bool,
     /// Specify the target  
     #[arg(short, long, default_value_t = String::from("x86_64"))]
     target: String,
+    /// Do not delete intermediate files
+    #[arg(long)]
+    save_temps: bool,
     /// Print info to stdout
     #[arg(long, value_enum, default_value_os_t)]
     print: PrintInfo,
@@ -45,7 +51,6 @@ enum PrintInfo {
 fn main() {
     let args = Args::parse();
 
-    // TODO: move this to SourceMap
     let mut input_file = File::open(&args.input).unwrap();
     let mut src = Vec::new();
     input_file.read_to_end(&mut src).unwrap();
@@ -79,21 +84,67 @@ fn main() {
         }
 
         let obj = module.finish();
-        let out_path = args
-            .output
-            .unwrap_or_else(|| args.input.with_extension("o"));
+        let obj_path = if args.only_compile {
+            args.output
+                .clone()
+                .unwrap_or_else(|| args.input.with_extension("o"))
+        } else {
+            args.input.with_extension("o")
+        };
 
-        let mut output = File::create(&out_path).unwrap();
-        output.write_all(&obj.emit().unwrap()).unwrap();
-        println!(
-            "Compiled to '{}' [{}]",
-            out_path.display(),
-            if args.optimize {
-                "optimized"
-            } else {
-                "unoptimized"
+        {
+            let mut obj_file = File::create(&obj_path).unwrap();
+            obj_file.write_all(&obj.emit().unwrap()).unwrap();
+            println!("Created object file '{}'", obj_path.display());
+        }
+
+        if args.only_compile {
+            println!(
+                "Compiled to '{}' [{}]",
+                obj_path.display(),
+                if args.optimize {
+                    "optimized"
+                } else {
+                    "unoptimized"
+                }
+            );
+            process::exit(0);
+        } else {
+            // call linker
+            let exe_path = args.output.unwrap_or_else(|| args.input.with_extension(""));
+            let linker_output = Command::new("ld")
+                .arg("-o")
+                .arg(&exe_path)
+                .arg("-pie")
+                .args(["-dynamic-linker", "/lib64/ld-linux-x86-64.so.2"])
+                .args(["/usr/lib/crt1.o", "/usr/lib/crti.o"])
+                .arg("-lc")
+                .arg(&obj_path)
+                .arg("/usr/lib/crtn.o")
+                .output()
+                .expect("Linking");
+
+            if !args.save_temps {
+                fs::remove_file(&obj_path).expect("Removing object file");
+                println!("Remove object file '{}'", obj_path.display());
             }
-        );
-        process::exit(0);
+
+            if linker_output.status.success() {
+                println!(
+                    "Compiled to '{}' [{}]",
+                    exe_path.display(),
+                    if args.optimize {
+                        "optimized"
+                    } else {
+                        "unoptimized"
+                    }
+                );
+                process::exit(0);
+            } else {
+                eprintln!("Linking failed with {}", linker_output.status);
+                io::stderr().write_all(&linker_output.stderr).unwrap();
+                process::exit(1);
+            }
+        }
     }
 }

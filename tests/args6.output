@@ -1,4 +1,8 @@
 OK
+STDOUT [85B]:
 Testing how well passing 6 arguments works.
 Expected output is `1 2 3 4 5`
 1 2 3 4 5
+
+STDERR [0B]:
+

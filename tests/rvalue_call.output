@@ -1,4 +1,8 @@
 OK
+STDOUT [12B]:
 Foo
 Bar
 Baz
+
+STDERR [0B]:
+

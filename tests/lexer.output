@@ -1,4 +1,7 @@
-CF
+CE
+STDOUT [0B]:
+
+STDERR [290B]:
 Error: unexpected token 'Slash', expected name
    ╭─[ tests/lexer.b:2:1 ]
    │
@@ -9,3 +12,4 @@ Error: unexpected token 'Name', expected any of CParen, Comma
     │
  18 │     assert_equal(0x45, 69, "0x45 == 69");
 ────╯
+

@@ -2,3 +2,6 @@
 resolver = "3"
 members = ["blang", "comptest"]
 default-members = ["blang", "comptest"]
+
+[workspace.dependencies]
+clap = { version = "4.5", features = ["derive"] }

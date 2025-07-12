@@ -1,3 +1,7 @@
 OK
+STDOUT [41B]:
 Only Foo should be printed bellow:
   Foo
+
+STDERR [0B]:
+

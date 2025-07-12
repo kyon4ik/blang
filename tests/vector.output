@@ -1,4 +1,5 @@
 OK
+STDOUT [70B]:
 34 + 35 = 69
 Just
 Testing
@@ -8,3 +9,6 @@ Globals
 2 => 6
 3 => 8
 4 => 10
+
+STDERR [0B]:
+
