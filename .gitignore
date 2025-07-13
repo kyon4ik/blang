@@ -8,3 +8,8 @@
 # Examples
 /examples/*
 !/examples/*.b
+
+# libb
+/libb/*
+!/libb/*.b
+!/libb/*.s

@@ -83,6 +83,10 @@ fn main() {
         }
 
         println!("Target: {}", args.target);
+        println!(
+            "Default CallConv: {:#?}",
+            args.target.default_calling_convention().unwrap()
+        );
         let obj = module.finish();
         let obj_path = if args.only_compile {
             args.output
@@ -151,7 +155,11 @@ fn link_binary(exe_path: &Path, obj_path: &Path, target: &Triple) -> process::Ou
         ),
     };
     let mut cmd = Command::new(linker);
-    cmd.arg(o_flag).arg(exe_path).arg(obj_path);
+    cmd.args(["-L", "libb"])
+        .args(["-l", "b"])
+        .arg(o_flag)
+        .arg(exe_path)
+        .arg(obj_path);
     print!("Running linker: ");
     print_command(&cmd);
     cmd.output().unwrap()
