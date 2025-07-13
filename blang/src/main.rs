@@ -155,11 +155,11 @@ fn link_binary(exe_path: &Path, obj_path: &Path, target: &Triple) -> process::Ou
         ),
     };
     let mut cmd = Command::new(linker);
-    cmd.args(["-L", "libb"])
-        .args(["-l", "b"])
-        .arg(o_flag)
+    cmd.arg(o_flag)
         .arg(exe_path)
-        .arg(obj_path);
+        .arg(obj_path)
+        .args(["-L", "libb"])
+        .args(["-l", "b"]);
     print!("Running linker: ");
     print_command(&cmd);
     cmd.output().unwrap()
