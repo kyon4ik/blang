@@ -158,6 +158,10 @@ impl Module {
             .unwrap();
 
         let gen_ctx = Context::new(isa, path, diag);
+        println!(
+            "Default calling convention: {}",
+            gen_ctx.module.target_config().default_call_conv
+        );
         let ctx = gen_ctx.module.make_context();
         let func_ctx = clf::FunctionBuilderContext::new();
 

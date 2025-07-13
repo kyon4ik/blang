@@ -28,4 +28,4 @@ jobs:
       - name: Cargo test
         run: cargo test --workspace --all-targets --all-features
       - name: Compiler test
-        run: ./target/debug/comptest tests --verbose
+        run: ./target/debug/comptest tests --verbose -- -t=aarch64-darwin
