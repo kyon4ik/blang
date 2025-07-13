@@ -129,6 +129,7 @@ impl TestStager for QuietStager<'_, '_> {
 
 impl TestStager for LoudStager<'_, '_> {
     fn create(&self, stage: TestStage, test_path: &Path) -> Command {
+        println!("-- Stage {stage} --");
         match stage {
             TestStage::Compiling => {
                 let cmd = compile_cmd(test_path, self.compiler_path, self.compiler_args);

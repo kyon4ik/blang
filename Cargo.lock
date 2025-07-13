@@ -101,6 +101,7 @@ dependencies = [
  "rustc-hash",
  "strum",
  "strum_macros",
+ "target-lexicon",
 ]
 
 [[package]]

@@ -1,15 +1,18 @@
+use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::num::NonZeroU8;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 use std::rc::Rc;
+use std::str::FromStr;
 
 use blang::ast::print::PrettyPrinter;
 use blang::codegen::Module;
 use blang::diagnostics::{DiagConfig, Diagnostics, SourceMap};
 use blang::parser::Parser;
 use clap::{Parser as _, ValueEnum};
+use target_lexicon::Triple;
 
 #[derive(clap::Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -26,8 +29,8 @@ struct Args {
     #[arg(short = 'c')]
     only_compile: bool,
     /// Specify the target  
-    #[arg(short, long, default_value_t = String::from("x86_64"))]
-    target: String,
+    #[arg(short, long, value_parser = parse_triple, default_value_t = Triple::host())]
+    target: Triple,
     /// Do not delete intermediate files
     #[arg(long)]
     save_temps: bool,
@@ -37,15 +40,6 @@ struct Args {
     /// Maximal number of errors
     #[arg(long, default_value_t = 5)]
     max_errors: u8,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, ValueEnum)]
-#[value(rename_all = "lower")]
-enum PrintInfo {
-    #[default]
-    None,
-    Ast,
-    Ir,
 }
 
 fn main() {
@@ -64,7 +58,12 @@ fn main() {
     let mut parser = Parser::new(&src, diag.clone());
     let defs = parser.parse_program();
 
-    let mut module = Module::new(&args.target, &args.input, args.optimize, diag.clone());
+    let mut module = Module::new(
+        args.target.clone(),
+        &args.input,
+        args.optimize,
+        diag.clone(),
+    );
     module.run_global_pass(&defs);
     module.run_local_pass(&defs, args.print == PrintInfo::Ir);
 
@@ -83,6 +82,7 @@ fn main() {
             }
         }
 
+        println!("Target: {}", args.target);
         let obj = module.finish();
         let obj_path = if args.only_compile {
             args.output
@@ -112,17 +112,7 @@ fn main() {
         } else {
             // call linker
             let exe_path = args.output.unwrap_or_else(|| args.input.with_extension(""));
-            let linker_output = Command::new("ld")
-                .arg("-o")
-                .arg(&exe_path)
-                .arg("-pie")
-                .args(["-dynamic-linker", "/lib64/ld-linux-x86-64.so.2"])
-                .args(["/usr/lib/crt1.o", "/usr/lib/crti.o"])
-                .arg("-lc")
-                .arg(&obj_path)
-                .arg("/usr/lib/crtn.o")
-                .output()
-                .expect("Linking");
+            let linker_output = link_binary(&exe_path, &obj_path, &args.target);
 
             if !args.save_temps {
                 fs::remove_file(&obj_path).expect("Removing object file");
@@ -147,4 +137,54 @@ fn main() {
             }
         }
     }
+}
+
+fn link_binary(exe_path: &Path, obj_path: &Path, target: &Triple) -> process::Output {
+    use target_lexicon::OperatingSystem as Os;
+    let (linker, o_flag) = match target.operating_system {
+        Os::MacOSX(_) | Os::Darwin(_) => ("clang", "-o"),
+        Os::Linux => ("gcc", "-o"),
+        Os::Windows => ("cl.exe", "/Fe:"),
+        _ => panic!(
+            "operating system {} is not supported",
+            target.operating_system
+        ),
+    };
+    let mut cmd = Command::new(linker);
+    cmd.arg(o_flag).arg(exe_path).arg(obj_path);
+    print!("Running linker: ");
+    print_command(&cmd);
+    cmd.output().unwrap()
+}
+
+fn print_command(cmd: &Command) {
+    print!("{}", cmd.get_program().display());
+    for arg in cmd.get_args() {
+        print!(" {}", arg.display());
+    }
+    println!();
+}
+
+#[derive(Debug)]
+struct TripleParseErrorWrapper(target_lexicon::ParseError);
+
+impl fmt::Display for TripleParseErrorWrapper {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::error::Error for TripleParseErrorWrapper {}
+
+fn parse_triple(s: &str) -> Result<Triple, TripleParseErrorWrapper> {
+    Triple::from_str(s).map_err(TripleParseErrorWrapper)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, ValueEnum)]
+#[value(rename_all = "lower")]
+enum PrintInfo {
+    #[default]
+    None,
+    Ast,
+    Ir,
 }

@@ -278,3 +278,13 @@ impl fmt::Display for RunStatus {
         f.write_str(str)
     }
 }
+
+impl fmt::Display for TestStage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let str = match self {
+            TestStage::Compiling => "compiling",
+            TestStage::Running => "running",
+        };
+        f.write_str(str)
+    }
+}

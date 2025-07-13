@@ -13,6 +13,7 @@ use cranelift_frontend as clf;
 use cranelift_module::{self as clm, Module as _};
 use cranelift_object as clo;
 use rustc_hash::FxHashMap;
+use target_lexicon::Triple;
 
 pub struct Module {
     ctx: clb::Context,
@@ -144,14 +145,14 @@ impl Context {
 }
 
 impl Module {
-    pub fn new(target: &str, path: &Path, optimize: bool, diag: Rc<Diagnostics>) -> Self {
+    pub fn new(target: Triple, path: &Path, optimize: bool, diag: Rc<Diagnostics>) -> Self {
         let mut shared_builder = clb::settings::builder();
         shared_builder.enable("is_pic").unwrap();
         if optimize {
             shared_builder.set("opt_level", "speed_and_size").unwrap();
         }
         let shared_flags = clb::settings::Flags::new(shared_builder);
-        let isa = clb::isa::lookup_by_name(target)
+        let isa = clb::isa::lookup(target)
             .unwrap()
             .finish(shared_flags)
             .unwrap();
