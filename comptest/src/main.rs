@@ -27,7 +27,7 @@ fn main() {
 
     let package_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let project_dir = package_dir.parent().unwrap();
-    let compiler_path = project_dir.join("target/release/blang");
+    let compiler_path = project_dir.join("target/debug/blang");
 
     let test_suite_path = &args.tests;
     let test_suite_meta = fs::metadata(test_suite_path).unwrap();
