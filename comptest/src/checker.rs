@@ -31,6 +31,7 @@ pub enum FailReason {
     WrongStatus {
         expected: RunStatus,
         found: RunStatus,
+        stderr: Vec<u8>,
     },
     WrongStdout {
         expected: Vec<u8>,
@@ -67,6 +68,7 @@ pub fn mapper_long(test_path: &Path, output: TestOutput) -> TestResult {
         TestResult::Fail(FailReason::WrongStatus {
             expected: expected_output.run_status,
             found: output.run_status,
+            stderr: output.stderr,
         })
     } else if output.stdout != expected_output.stdout {
         TestResult::Fail(FailReason::WrongStdout {
@@ -156,8 +158,14 @@ impl fmt::Display for FailReason {
             anstyle::Reset
         )?;
         match self {
-            Self::WrongStatus { expected, found } => {
-                write!(f, "Expected {expected}, found {found}")
+            Self::WrongStatus {
+                expected,
+                found,
+                stderr,
+            } => {
+                let stderr_utf = String::from_utf8_lossy(stderr);
+                writeln!(f, "Expected {expected}, found {found}")?;
+                write!(f, "Stderr:\n{stderr_utf}")
             }
             Self::WrongStdout { expected, found } => {
                 let expected_utf = String::from_utf8_lossy(expected);
