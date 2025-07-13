@@ -17,6 +17,9 @@ struct Args {
     /// Record output of test(s)
     #[arg(long)]
     record: bool,
+    /// Print more info for multiple tests
+    #[arg(long)]
+    verbose: bool,
     /// Compiler flags
     #[arg(last = true)]
     compiler_args: Vec<String>,
@@ -66,6 +69,24 @@ fn main() {
             for (test_path, run_status) in tests.iter().zip(run_statuses) {
                 print_run_status(test_path, run_status);
             }
+        } else if args.verbose {
+            let mut runner = TestRunner::new(stp, checker::mapper_long);
+            for test_path in &tests {
+                runner.submit(Test::new(test_path));
+            }
+            let results = runner.wait();
+            let tests_count = tests.len();
+            let mut failed_tests_count = 0;
+            for (test_path, result) in tests.iter().zip(results) {
+                print_test_result(test_path, &result);
+                if matches!(result, TestResult::Fail(_)) {
+                    failed_tests_count += 1;
+                }
+            }
+            if failed_tests_count > 0 {
+                println!("{failed_tests_count} out of {tests_count} tests failed.");
+                process::exit(1);
+            }
         } else {
             let mut runner = TestRunner::new(stp, checker::mapper_short);
             for test_path in &tests {
@@ -76,7 +97,7 @@ fn main() {
             let mut failed_tests_count = 0;
             for (test_path, status) in tests.iter().zip(statuses) {
                 print_test_status(test_path, status);
-                if status == TestStatus::Fail {
+                if matches!(status, TestStatus::Fail(_)) {
                     failed_tests_count += 1;
                 }
             }
@@ -167,8 +188,8 @@ fn print_command(cmd: &Command) {
 fn print_test_result(test_path: &Path, result: &TestResult) {
     print_test_status(test_path, result.status());
     match result {
-        TestResult::Ok => println!("Test passed."),
-        TestResult::Fail(fail_reason) => println!("Test failed due to:\n{fail_reason}"),
+        TestResult::Ok => {}
+        TestResult::Fail(fail_reason) => println!("Test failed due to: {fail_reason}"),
     }
 }
 

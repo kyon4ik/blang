@@ -11,11 +11,19 @@ pub enum TestResult {
     Fail(FailReason),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TestStatus {
     Ok,
+    Fail(FailReasonKind),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum FailReasonKind {
+    WrongStatus,
+    WrongStdout,
+    WrongStderr,
     #[default]
-    Fail,
+    Unspecified,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -39,10 +47,14 @@ pub enum FailReason {
 pub fn mapper_short(test_path: &Path, output: TestOutput) -> TestStatus {
     let expected_path = test_path.with_extension("output");
     let expected_output = TestOutput::from_bytes(&fs::read(expected_path).unwrap()).unwrap();
-    if output == expected_output {
-        TestStatus::Ok
+    if output.run_status != expected_output.run_status {
+        TestStatus::Fail(FailReasonKind::WrongStatus)
+    } else if output.stdout != expected_output.stdout {
+        TestStatus::Fail(FailReasonKind::WrongStdout)
+    } else if output.stderr != expected_output.stderr {
+        TestStatus::Fail(FailReasonKind::WrongStderr)
     } else {
-        TestStatus::Fail
+        TestStatus::Ok
     }
 }
 
@@ -77,18 +89,17 @@ impl Default for TestResult {
     }
 }
 
-impl TestStatus {
-    pub const fn as_str(&self) -> &'static str {
-        match self {
-            Self::Ok => "ok",
-            Self::Fail => "fail",
-        }
+impl Default for TestStatus {
+    fn default() -> Self {
+        Self::Fail(Default::default())
     }
+}
 
+impl TestStatus {
     pub fn style(&self) -> Style {
         let ansi = match self {
             Self::Ok => AnsiColor::Green,
-            Self::Fail => AnsiColor::Red,
+            Self::Fail(_) => AnsiColor::Red,
         };
         anstyle::Style::new().fg_color(Some(Color::Ansi(ansi)))
     }
@@ -98,29 +109,62 @@ impl TestResult {
     pub fn status(&self) -> TestStatus {
         match self {
             Self::Ok => TestStatus::Ok,
-            Self::Fail(_) => TestStatus::Fail,
+            Self::Fail(fail_reason) => TestStatus::Fail(fail_reason.kind()),
+        }
+    }
+}
+
+impl FailReason {
+    pub fn kind(&self) -> FailReasonKind {
+        match self {
+            FailReason::WrongStatus { .. } => FailReasonKind::WrongStatus,
+            FailReason::WrongStdout { .. } => FailReasonKind::WrongStdout,
+            FailReason::WrongStderr { .. } => FailReasonKind::WrongStderr,
+            FailReason::Unspecified => FailReasonKind::Unspecified,
         }
     }
 }
 
 impl fmt::Display for TestStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}{}{}", self.style(), self.as_str(), anstyle::Reset)
+        match self {
+            Self::Ok => write!(f, "{}ok{}", self.style(), anstyle::Reset),
+            Self::Fail(reason) => write!(f, "{}fail ({reason}){}", self.style(), anstyle::Reset),
+        }
+    }
+}
+
+impl fmt::Display for FailReasonKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let str = match self {
+            FailReasonKind::WrongStatus => "wrong status",
+            FailReasonKind::WrongStdout => "wrong stdout",
+            FailReasonKind::WrongStderr => "wrong stderr",
+            FailReasonKind::Unspecified => "unspecified",
+        };
+        f.write_str(str)
     }
 }
 
 impl fmt::Display for FailReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(
+            f,
+            "{}{}{}",
+            Style::new().fg_color(Some(Color::Ansi(AnsiColor::Yellow))),
+            self.kind(),
+            anstyle::Reset
+        )?;
         match self {
             Self::WrongStatus { expected, found } => {
-                write!(f, "Wrong status:\nExpected {expected}, found {found}")
+                write!(f, "Expected {expected}, found {found}")
             }
             Self::WrongStdout { expected, found } => {
                 let expected_utf = String::from_utf8_lossy(expected);
                 let found_utf = String::from_utf8_lossy(found);
                 write!(
                     f,
-                    "Wrong stdout:\nExpected:\n{}\nFound:\n{}",
+                    "Expected:\n{}\nFound:\n{}",
                     expected_utf.escape_default(),
                     found_utf.escape_default()
                 )
@@ -130,7 +174,7 @@ impl fmt::Display for FailReason {
                 let found_utf = String::from_utf8_lossy(found);
                 write!(
                     f,
-                    "Wrong stderr:\nExpected:\n{}\nFound:\n{}",
+                    "Expected:\n{}\nFound:\n{}",
                     expected_utf.escape_default(),
                     found_utf.escape_default()
                 )
