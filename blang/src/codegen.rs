@@ -1,3 +1,4 @@
+use std::collections::hash_map;
 use std::path::Path;
 use std::rc::Rc;
 
@@ -17,59 +18,41 @@ use target_lexicon::Triple;
 
 pub struct Module {
     ctx: clb::Context,
+    module: clo::ObjectModule,
     func_ctx: clf::FunctionBuilderContext,
     gen_ctx: Context,
 }
 
 struct Context {
+    diag: Rc<Diagnostics>,
+    word_type: clir::Type,
+    functions: FxHashMap<InternedStr, FuncInfo>,
+    vectors: FxHashMap<InternedStr, DataInfo>,
     numbers: FxHashMap<InternedStr, i64>,
     strings: FxHashMap<InternedStr, clm::DataId>,
-    module: clo::ObjectModule,
-    word_type: clir::Type,
-    globals: FxHashMap<InternedStr, GlobalInfo>,
-    diag: Rc<Diagnostics>,
 }
 
 struct Function<'f> {
+    name: &'f Name,
+    ctx: &'f mut Context,
+    module: &'f mut clo::ObjectModule,
     builder: clf::FunctionBuilder<'f>,
+    return_block: clir::Block,
+    autos: FxHashMap<InternedStr, AutoInfo>,
     labels: FxHashMap<InternedStr, LabelInfo>,
     unused_labels: FxHashMap<InternedStr, Span>,
     switch_stack: Vec<clf::Switch>,
-    autos: FxHashMap<InternedStr, AutoInfo>,
     signatures: FxHashMap<usize, clir::SigRef>,
-    return_block: clir::Block,
-    ctx: &'f mut Context,
-    name: &'f Name,
-}
-
-struct LabelInfo {
-    block: clir::Block,
-    span: Span,
-}
-
-struct GlobalInfo {
-    id: clm::FuncOrDataId,
-    is_rvalue: bool,
-    span: Span,
 }
 
 impl Context {
-    pub fn new(isa: clb::isa::OwnedTargetIsa, path: &Path, diag: Rc<Diagnostics>) -> Self {
-        let word_type = isa.pointer_type();
-        let builder = clo::ObjectBuilder::new(
-            isa,
-            path.as_os_str().as_encoded_bytes(),
-            clm::default_libcall_names(),
-        )
-        .unwrap();
-        let module = clo::ObjectModule::new(builder);
-
+    pub fn new(word_type: clir::Type, diag: Rc<Diagnostics>) -> Self {
         Self {
             numbers: FxHashMap::default(),
             strings: FxHashMap::default(),
-            module,
+            functions: FxHashMap::default(),
+            vectors: FxHashMap::default(),
             word_type,
-            globals: FxHashMap::default(),
             diag,
         }
     }
@@ -90,10 +73,10 @@ impl Context {
         })
     }
 
-    fn create_string(&mut self, lit: &Literal) -> clm::DataId {
+    fn create_string(&mut self, lit: &Literal, module: &mut clo::ObjectModule) -> clm::DataId {
         debug_assert_eq!(lit.kind, LiteralKind::String);
         *self.strings.entry(lit.value).or_insert_with(|| {
-            let data_id = self.module.declare_anonymous_data(true, false).unwrap();
+            let data_id = module.declare_anonymous_data(true, false).unwrap();
             let mut desc = clm::DataDescription::new();
             let mut data = match unescape(lit.as_bytes()) {
                 Ok(data) => data,
@@ -107,7 +90,7 @@ impl Context {
             };
             data.push(b'\0');
             desc.define(data.into_boxed_slice());
-            self.module.define_data(data_id, &desc).unwrap();
+            module.define_data(data_id, &desc).unwrap();
             data_id
         })
     }
@@ -157,20 +140,100 @@ impl Module {
             .finish(shared_flags)
             .unwrap();
 
-        let gen_ctx = Context::new(isa, path, diag);
-        let ctx = gen_ctx.module.make_context();
+        let gen_ctx = Context::new(isa.pointer_type(), diag);
+        let builder = clo::ObjectBuilder::new(
+            isa,
+            path.as_os_str().as_encoded_bytes(),
+            clm::default_libcall_names(),
+        )
+        .unwrap();
+        let module = clo::ObjectModule::new(builder);
+        let ctx = module.make_context();
         let func_ctx = clf::FunctionBuilderContext::new();
 
         Self {
             func_ctx,
+            module,
             ctx,
             gen_ctx,
         }
     }
 
     pub fn run_global_pass(&mut self, program: &[DefAst]) {
+        // Predefined functions
+        let char_name = Name::new(InternedStr::new(b"char"), Span::empty());
+        let func_id = self
+            .register_global_function(&char_name, 2, clm::Linkage::Local)
+            .unwrap()
+            .id;
+        let mut function = self.start_function(&char_name);
+        function.init(&[
+            Name::new(InternedStr::new(b"__s"), Span::empty()),
+            Name::new(InternedStr::new(b"__i"), Span::empty()),
+        ]);
+        let entry_bb = function.builder.current_block().unwrap();
+        let param_values = function.builder.block_params(entry_bb).to_vec();
+        let addr = function
+            .builder
+            .ins()
+            .iadd(param_values[0], param_values[1]);
+        let retval = function.builder.ins().uload8(
+            function.ctx.word_type,
+            clir::MemFlags::trusted(),
+            addr,
+            0,
+        );
+        function
+            .builder
+            .ins()
+            .jump(function.return_block, &[clir::BlockArg::Value(retval)]);
+        function.finish(true);
+        self.module.define_function(func_id, &mut self.ctx).unwrap();
+        debug_assert!(clb::verify_function(&self.ctx.func, self.module.isa().flags()).is_ok());
+
+        let char_name = Name::new(InternedStr::new(b"lchar"), Span::empty());
+        let func_id = self
+            .register_global_function(&char_name, 3, clm::Linkage::Local)
+            .unwrap()
+            .id;
+        let mut function = self.start_function(&char_name);
+        function.init(&[
+            Name::new(InternedStr::new(b"__s"), Span::empty()),
+            Name::new(InternedStr::new(b"__i"), Span::empty()),
+            Name::new(InternedStr::new(b"__c"), Span::empty()),
+        ]);
+        let entry_bb = function.builder.current_block().unwrap();
+        let param_values = function.builder.block_params(entry_bb).to_vec();
+        let addr = function
+            .builder
+            .ins()
+            .iadd(param_values[0], param_values[1]);
+        function
+            .builder
+            .ins()
+            .istore8(clir::MemFlags::trusted(), param_values[2], addr, 0);
+        let retval = function.builder.ins().iconst(function.ctx.word_type, 0);
+        function
+            .builder
+            .ins()
+            .jump(function.return_block, &[clir::BlockArg::Value(retval)]);
+        function.finish(true);
+        self.module.define_function(func_id, &mut self.ctx).unwrap();
+        debug_assert!(clb::verify_function(&self.ctx.func, self.module.isa().flags()).is_ok());
+
         for def in program {
-            self.run_global_pass_on(def);
+            match &def.kind {
+                DefKind::Vector { size, .. } => {
+                    self.register_global_data(&def.name, size, clm::Linkage::Export, true)
+                }
+                DefKind::Function { params, .. } => {
+                    self.register_global_function(
+                        &def.name,
+                        params.params.len(),
+                        clm::Linkage::Export,
+                    );
+                }
+            }
         }
     }
 
@@ -180,72 +243,105 @@ impl Module {
         }
     }
 
-    fn module(&mut self) -> &mut clo::ObjectModule {
-        &mut self.gen_ctx.module
-    }
-
-    fn run_global_pass_on(&mut self, def: &DefAst) {
-        self.gen_ctx
-            .globals
-            .entry(def.name.value)
-            .and_modify(|global| {
+    fn register_global_data(
+        &mut self,
+        name: &Name,
+        size: &VecSize,
+        linkage: clm::Linkage,
+        writable: bool,
+    ) {
+        if let Some(func) = self.gen_ctx.vectors.get(&name.value) {
+            self.gen_ctx
+                .diag
+                .error(
+                    name.span,
+                    format!("redefinition of global name '{}'", name.as_str()),
+                )
+                .add_label(func.span, "first defined here")
+                .finish();
+            return;
+        }
+        match self.gen_ctx.vectors.entry(name.value) {
+            hash_map::Entry::Occupied(global) => {
                 self.gen_ctx
                     .diag
                     .error(
-                        def.name.span,
-                        format!("redefinition of global name '{}'", def.name.as_str()),
+                        name.span,
+                        format!("redefinition of global name '{}'", name.as_str()),
                     )
-                    .add_label(global.span, "first defined here")
+                    .add_label(global.get().span, "first defined here")
                     .finish();
-            })
-            .or_insert_with(|| {
-                let global_name = def.name.as_str();
-                let (id, is_rvalue) = match &def.kind {
-                    DefKind::Vector { size, .. } => {
-                        let data_id = self
-                            .gen_ctx
-                            .module
-                            .declare_data(global_name, clm::Linkage::Export, true, false)
-                            .unwrap();
+            }
+            hash_map::Entry::Vacant(entry) => {
+                let id = self
+                    .module
+                    .declare_data(name.as_str(), linkage, writable, false)
+                    .unwrap();
 
-                        let is_rvalue = !matches!(size, VecSize::Undef);
-                        (clm::FuncOrDataId::Data(data_id), is_rvalue)
-                    }
-                    DefKind::Function { params, .. } => {
-                        let params = &params.params;
-                        let mut sig = self.gen_ctx.module.make_signature();
-                        sig.params.extend(std::iter::repeat_n(
-                            clir::AbiParam::new(self.gen_ctx.word_type),
-                            params.len(),
-                        ));
-                        sig.returns
-                            .push(clir::AbiParam::new(self.gen_ctx.word_type));
-
-                        let func_id = self
-                            .gen_ctx
-                            .module
-                            .declare_function(global_name, clm::Linkage::Export, &sig)
-                            .unwrap();
-                        (clm::FuncOrDataId::Func(func_id), true)
-                    }
-                };
-                GlobalInfo {
+                entry.insert(DataInfo {
                     id,
-                    is_rvalue,
-                    span: def.name.span,
-                }
-            });
+                    is_rvalue: !matches!(size, VecSize::Undef),
+                    span: name.span,
+                });
+            }
+        }
+    }
+
+    fn register_global_function(
+        &mut self,
+        name: &Name,
+        param_count: usize,
+        linkage: clm::Linkage,
+    ) -> Option<&mut FuncInfo> {
+        if let Some(vec) = self.gen_ctx.vectors.get(&name.value) {
+            self.gen_ctx
+                .diag
+                .error(
+                    name.span,
+                    format!("redefinition of global name '{}'", name.as_str()),
+                )
+                .add_label(vec.span, "first defined here")
+                .finish();
+            return None;
+        }
+        match self.gen_ctx.functions.entry(name.value) {
+            hash_map::Entry::Occupied(global) => {
+                self.gen_ctx
+                    .diag
+                    .error(
+                        name.span,
+                        format!("redefinition of global name '{}'", name.as_str()),
+                    )
+                    .add_label(global.get().span, "first defined here")
+                    .finish();
+                None
+            }
+            hash_map::Entry::Vacant(entry) => {
+                let mut sig = self.module.make_signature();
+                sig.params.extend(std::iter::repeat_n(
+                    clir::AbiParam::new(self.gen_ctx.word_type),
+                    param_count,
+                ));
+                sig.returns
+                    .push(clir::AbiParam::new(self.gen_ctx.word_type));
+
+                let id = self
+                    .module
+                    .declare_function(name.as_str(), linkage, &sig)
+                    .unwrap();
+                Some(entry.insert(FuncInfo {
+                    id,
+                    span: name.span,
+                }))
+            }
+        }
     }
 
     fn run_local_pass_on(&mut self, def: &DefAst, print: bool) {
-        let Some(global) = self.gen_ctx.globals.get(&def.name.value) else {
-            return;
-        };
         match &def.kind {
             DefKind::Vector { list, size } => {
-                let data_id = match global.id {
-                    clm::FuncOrDataId::Data(data_id) => data_id,
-                    _ => return,
+                let Some(data_id) = self.gen_ctx.vectors.get(&def.name.value).map(|f| f.id) else {
+                    return;
                 };
 
                 let size = match size {
@@ -277,32 +373,26 @@ impl Module {
                                 LiteralKind::Number => {
                                     let num = self.gen_ctx.create_number(lit);
 
-                                    bytes.extend_from_slice(&match self
-                                        .gen_ctx
-                                        .module
-                                        .isa()
-                                        .endianness()
-                                    {
-                                        clir::Endianness::Little => num.to_le_bytes(),
-                                        clir::Endianness::Big => num.to_be_bytes(),
-                                    });
+                                    bytes.extend_from_slice(
+                                        &match self.module.isa().endianness() {
+                                            clir::Endianness::Little => num.to_le_bytes(),
+                                            clir::Endianness::Big => num.to_be_bytes(),
+                                        },
+                                    );
                                 }
                                 LiteralKind::Char => {
                                     let char = self.gen_ctx.create_char(lit) as i64;
 
-                                    bytes.extend_from_slice(&match self
-                                        .gen_ctx
-                                        .module
-                                        .isa()
-                                        .endianness()
-                                    {
-                                        clir::Endianness::Little => char.to_le_bytes(),
-                                        clir::Endianness::Big => char.to_be_bytes(),
-                                    });
+                                    bytes.extend_from_slice(
+                                        &match self.module.isa().endianness() {
+                                            clir::Endianness::Little => char.to_le_bytes(),
+                                            clir::Endianness::Big => char.to_be_bytes(),
+                                        },
+                                    );
                                 }
                                 LiteralKind::String => {
-                                    let data_id = self.gen_ctx.create_string(lit);
-                                    let gv = self.module().declare_data_in_data(data_id, &mut data);
+                                    let data_id = self.gen_ctx.create_string(lit, &mut self.module);
+                                    let gv = self.module.declare_data_in_data(data_id, &mut data);
                                     data.write_data_addr(bytes.len() as u32, gv, 0);
                                     bytes.extend(std::iter::repeat_n(
                                         0,
@@ -311,31 +401,23 @@ impl Module {
                                 }
                             },
                             ImmVal::Name(name) => {
-                                if let Some(func_or_data) = self.gen_ctx.globals.get(&name.value) {
-                                    match func_or_data.id {
-                                        clm::FuncOrDataId::Func(func_id) => {
-                                            let func_ref = self
-                                                .module()
-                                                .declare_func_in_data(func_id, &mut data);
-                                            data.write_function_addr(bytes.len() as u32, func_ref);
-                                        }
-                                        clm::FuncOrDataId::Data(data_id) => {
-                                            let gv = self
-                                                .module()
-                                                .declare_data_in_data(data_id, &mut data);
-                                            data.write_data_addr(bytes.len() as u32, gv, 0);
-                                        }
-                                    }
-                                    bytes.extend(std::iter::repeat_n(
-                                        0,
-                                        self.gen_ctx.word_type.bytes() as usize,
-                                    ));
+                                if let Some(func) = self.gen_ctx.functions.get(&name.value) {
+                                    let func_ref =
+                                        self.module.declare_func_in_data(func.id, &mut data);
+                                    data.write_function_addr(bytes.len() as u32, func_ref);
+                                } else if let Some(gdata) = self.gen_ctx.vectors.get(&name.value) {
+                                    let gv = self.module.declare_data_in_data(gdata.id, &mut data);
+                                    data.write_data_addr(bytes.len() as u32, gv, 0);
                                 } else {
                                     self.gen_ctx
                                         .diag
                                         .error(name.span, "undefined global name")
                                         .finish();
                                 }
+                                bytes.extend(std::iter::repeat_n(
+                                    0,
+                                    self.gen_ctx.word_type.bytes() as usize,
+                                ));
                             }
                         }
                     }
@@ -343,45 +425,56 @@ impl Module {
                     data.define(bytes.into_boxed_slice());
                 };
 
-                self.module().define_data(data_id, &data).unwrap();
+                self.module.define_data(data_id, &data).unwrap();
             }
             DefKind::Function { params, body } => {
-                let func_id = match global.id {
-                    clm::FuncOrDataId::Func(func_id) => func_id,
-                    _ => return,
+                let Some(func_id) = self.gen_ctx.functions.get(&def.name.value).map(|f| f.id)
+                else {
+                    return;
                 };
-                self.ctx.clear();
-                self.ctx.func.name =
-                    clir::UserFuncName::User(clir::UserExternalName::new(0, func_id.as_u32()));
-                self.ctx.func.signature = self
-                    .module()
-                    .declarations()
-                    .get_function_decl(func_id)
-                    .signature
-                    .clone();
 
-                let cfunc = Function::new(self, &def.name);
-                cfunc.build(params, body);
+                let mut function = self.start_function(&def.name);
+                function.init(&params.params);
+                function.visit_stmt(body);
+                function.finish(false);
 
                 if self.gen_ctx.diag.has_errors() {
                     self.func_ctx = clf::FunctionBuilderContext::new();
-                    return;
-                }
+                } else {
+                    self.module.define_function(func_id, &mut self.ctx).unwrap();
 
-                self.gen_ctx
-                    .module
-                    .define_function(func_id, &mut self.ctx)
-                    .unwrap();
-                if print {
-                    println!("{}", self.ctx.func.display());
+                    if print {
+                        println!("{}", self.ctx.func.display());
+                    }
+
+                    debug_assert!(
+                        clb::verify_function(&self.ctx.func, self.module.isa().flags()).is_ok()
+                    );
                 }
-                clb::verify_function(&self.ctx.func, self.gen_ctx.module.isa().flags()).unwrap();
             }
         }
     }
 
+    fn start_function<'f>(&'f mut self, name: &'f Name) -> Function<'f> {
+        let func_id = self.gen_ctx.functions.get(&name.value).unwrap().id;
+
+        // Clear
+        self.ctx.clear();
+
+        // Init
+        self.ctx.func.name =
+            clir::UserFuncName::User(clir::UserExternalName::new(0, func_id.as_u32()));
+        self.ctx.func.signature = self
+            .module
+            .declarations()
+            .get_function_decl(func_id)
+            .signature
+            .clone();
+        Function::new(self, name)
+    }
+
     pub fn finish(self) -> clo::ObjectProduct {
-        self.gen_ctx.module.finish()
+        self.module.finish()
     }
 }
 
@@ -397,27 +490,28 @@ impl<'f> Function<'f> {
             autos: FxHashMap::default(),
             signatures: FxHashMap::default(),
             return_block: clir::Block::from_u32(0),
+            module: &mut module.module,
             ctx: &mut module.gen_ctx,
             name,
         }
     }
 
-    fn build(mut self, params: &FuncParams, body: &StmtAst) {
+    fn init(&mut self, params: &[Name]) {
         // entry block
         let entry_block = self.builder.create_block();
         self.builder
             .append_block_params_for_function_params(entry_block);
         self.builder.switch_to_block(entry_block);
         let entry_block_params: Vec<_> = self.builder.block_params(entry_block).to_vec();
-        for (name, value) in params.params.iter().zip(entry_block_params) {
+        for (name, value) in params.iter().zip(entry_block_params) {
             self.create_param(name, value);
         }
 
         // exit block
         self.return_block = self.builder.create_block();
+    }
 
-        self.visit_stmt(body);
-
+    fn finish(mut self, ignore_errors: bool) {
         for (value, span) in self.unused_labels.drain() {
             self.ctx
                 .diag
@@ -426,10 +520,6 @@ impl<'f> Function<'f> {
                     format!("undefined label '{}'", Name::new(value, span).as_str()),
                 )
                 .finish();
-        }
-
-        if self.ctx.diag.has_errors() {
-            return;
         }
 
         if let Some(block) = self.builder.current_block() {
@@ -447,6 +537,10 @@ impl<'f> Function<'f> {
         self.builder.switch_to_block(self.return_block);
         let returns = self.builder.block_params(self.return_block).to_vec();
         self.builder.ins().return_(&returns);
+
+        if !ignore_errors && self.ctx.diag.has_errors() {
+            return;
+        }
 
         self.builder.seal_all_blocks();
         self.builder.finalize();
@@ -472,7 +566,6 @@ impl<'f> Function<'f> {
             });
     }
 
-    // TODO: alloc with constant
     fn create_auto(&mut self, name: &Name, size: u32) {
         let slot = self
             .builder
@@ -512,11 +605,8 @@ impl<'f> Function<'f> {
                 self.builder.ins().iconst(self.ctx.word_type, char)
             }
             LiteralKind::String => {
-                let data_id = self.ctx.create_string(literal);
-                let gv = self
-                    .ctx
-                    .module
-                    .declare_data_in_func(data_id, self.builder.func);
+                let data_id = self.ctx.create_string(literal, self.module);
+                let gv = self.module.declare_data_in_func(data_id, self.builder.func);
                 self.builder.ins().global_value(self.ctx.word_type, gv)
             }
         }
@@ -656,28 +746,17 @@ impl StmtVisitor for Function<'_> {
 
     fn visit_extrn(&mut self, extrn: &ExtrnStmt) {
         for name in &extrn.names {
-            if let Some(global) = self.ctx.globals.get(&name.value) {
-                match global.id {
-                    clm::FuncOrDataId::Func(func_id) => {
-                        let func_ref = self
-                            .ctx
-                            .module
-                            .declare_func_in_func(func_id, self.builder.func);
-                        let addr = self.builder.ins().func_addr(self.ctx.word_type, func_ref);
-                        self.declare_auto(name, addr, global.is_rvalue);
-                    }
-                    clm::FuncOrDataId::Data(data_id) => {
-                        let gv = self
-                            .ctx
-                            .module
-                            .declare_data_in_func(data_id, self.builder.func);
-                        let value = self.builder.ins().global_value(self.ctx.word_type, gv);
-                        self.declare_auto(name, value, global.is_rvalue);
-                    }
-                }
+            if let Some(func) = self.ctx.functions.get(&name.value) {
+                let func_ref = self.module.declare_func_in_func(func.id, self.builder.func);
+                let addr = self.builder.ins().func_addr(self.ctx.word_type, func_ref);
+                self.declare_auto(name, addr, true);
+            } else if let Some(data) = self.ctx.vectors.get(&name.value) {
+                let gv = self.module.declare_data_in_func(data.id, self.builder.func);
+                let value = self.builder.ins().global_value(self.ctx.word_type, gv);
+                self.declare_auto(name, value, data.is_rvalue);
             } else {
                 let global_name = name.as_str();
-                let mut signature = self.ctx.module.make_signature();
+                let mut signature = self.module.make_signature();
                 signature
                     .params
                     .push(clir::AbiParam::new(self.ctx.word_type));
@@ -685,14 +764,10 @@ impl StmtVisitor for Function<'_> {
                     .returns
                     .push(clir::AbiParam::new(self.ctx.word_type));
                 let func_id = self
-                    .ctx
                     .module
                     .declare_function(global_name, clm::Linkage::Import, &signature)
                     .unwrap();
-                let func_ref = self
-                    .ctx
-                    .module
-                    .declare_func_in_func(func_id, self.builder.func);
+                let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
                 let addr = self.builder.ins().func_addr(self.ctx.word_type, func_ref);
                 self.declare_auto(name, addr, true);
             }
@@ -1071,7 +1146,7 @@ impl ExprVisitor for Function<'_> {
             arg_values.push(val.inner);
         }
         let sig_ref = self.signatures.entry(call.args.len()).or_insert_with(|| {
-            let mut sig = self.ctx.module.make_signature();
+            let mut sig = self.module.make_signature();
             sig.params.extend(std::iter::repeat_n(
                 clir::AbiParam::new(self.ctx.word_type),
                 call.args.len(),
@@ -1087,6 +1162,11 @@ impl ExprVisitor for Function<'_> {
     }
 }
 
+// TODO:
+// Function(FuncRef)
+// FuncPtr(SigRef)
+// Place(Value)
+// Value(Value)
 #[derive(Clone, Copy, Debug)]
 struct Value {
     inner: clir::Value,
@@ -1107,6 +1187,22 @@ impl Value {
             is_lvalue: true,
         }
     }
+}
+
+struct LabelInfo {
+    block: clir::Block,
+    span: Span,
+}
+
+struct FuncInfo {
+    id: clm::FuncId,
+    span: Span,
+}
+
+struct DataInfo {
+    id: clm::DataId,
+    is_rvalue: bool,
+    span: Span,
 }
 
 #[derive(Clone, Copy)]
