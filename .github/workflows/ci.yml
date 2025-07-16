@@ -15,7 +15,7 @@ jobs:
       - name: Cargo test
         run: cargo test --workspace --all-targets --all-features
       - name: Build libb
-        run: make libb
+        run: make libb.a
       - name: Compiler test
         run: ./target/debug/comptest tests --verbose
   macos-aarch64:
@@ -30,6 +30,6 @@ jobs:
       - name: Cargo test
         run: cargo test --workspace --all-targets --all-features
       - name: Build libb
-        run: make libb
+        run: make libb.a
       - name: Compiler test
         run: ./target/debug/comptest tests --verbose
