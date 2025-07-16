@@ -1,0 +1,7 @@
+OK
+STDOUT [40B]:
+lower: hello, world
+UPPER: HELLO, WORLD
+
+STDERR [0B]:
+

@@ -954,7 +954,10 @@ impl ExprVisitor for Function<'_> {
             }
             Not => {
                 self.make_rvalue(&mut expr);
-                Some(Value::rvalue(self.builder.ins().bnot(expr.inner)))
+                let is_zero = self.builder.ins().icmp_imm(ICmp::Eq, expr.inner, 0);
+                Some(Value::rvalue(
+                    self.builder.ins().uextend(self.ctx.word_type, is_zero),
+                ))
             }
             Deref => {
                 self.make_rvalue(&mut expr);
