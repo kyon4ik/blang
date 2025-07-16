@@ -1,0 +1,30 @@
+CE
+STDOUT [0B]:
+
+STDERR [606B]:
+Error: control symbol inside string literal
+   ╭─[ tests/bad_literal.b:3:10 ]
+   │
+ 3 │     s = "
+───╯
+Error: unexpected token 'Name', expected 'Semi'
+   ╭─[ tests/bad_literal.b:4:9 ]
+   │
+ 4 │         THIS
+───╯
+Error: control symbol inside string literal
+   ╭─[ tests/bad_literal.b:8:7 ]
+   │
+ 8 │     ";
+───╯
+Error: control symbol inside character literal
+   ╭─[ tests/bad_literal.b:9:10 ]
+   │
+ 9 │     c = '
+───╯
+Error: control symbol inside character literal
+    ╭─[ tests/bad_literal.b:10:7 ]
+    │
+ 10 │     ';
+────╯
+

@@ -164,6 +164,15 @@ impl<'s> Lexer<'s> {
 
     fn read_char(&mut self, start: usize) -> TokenKind {
         while !self.is_eof() && self.peek() != b'\'' {
+            if self.peek().is_ascii_control() {
+                self.diag
+                    .error(
+                        Span::from((self.pos, self.pos + 1)),
+                        "control symbol inside character literal",
+                    )
+                    .finish();
+                break;
+            }
             if self.peek() == b'*' {
                 self.next();
             }
@@ -182,6 +191,15 @@ impl<'s> Lexer<'s> {
 
     fn read_string(&mut self, start: usize) -> TokenKind {
         while !self.is_eof() && self.peek() != b'"' {
+            if self.peek().is_ascii_control() {
+                self.diag
+                    .error(
+                        Span::from((self.pos, self.pos + 1)),
+                        "control symbol inside string literal",
+                    )
+                    .finish();
+                break;
+            }
             if self.peek() == b'*' {
                 self.next();
             }
