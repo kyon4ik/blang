@@ -1,5 +1,6 @@
-libb: libb/all.b
+libb: libb/all.b target/debug/blang
 	target/debug/blang -c libb/all.b -O
+	rm libb/libb.a
 	ar rcs libb/libb.a libb/all.o
 	
 # libb-x86_64-linux: libb/all.b libb/x86_64-linux.s
