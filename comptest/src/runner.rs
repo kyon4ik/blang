@@ -170,6 +170,8 @@ impl TestOutput {
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, &'static str> {
+        let bytes = replace_newlines(bytes);
+
         // run_status
         let (rs, bytes) = bytes.split_first_chunk().ok_or("spliting run status")?;
         let run_status = RunStatus::from_bytes(*rs).ok_or("parsing run status")?;
@@ -306,5 +308,34 @@ impl fmt::Display for TestStage {
             TestStage::Running => "running",
         };
         f.write_str(str)
+    }
+}
+
+fn replace_newlines(bytes: &[u8]) -> Vec<u8> {
+    let mut b = Vec::with_capacity(bytes.len());
+    for bytes in bytes.windows(2) {
+        if bytes != b"\r\n" {
+            b.push(bytes[0]);
+        }
+    }
+    if let Some(c) = bytes.last() {
+        b.push(*c);
+    }
+    b
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn windows_newlines() {
+        let a = b"hello, world\n";
+        let b = replace_newlines(b"hello, world\r\n");
+        assert_eq!(&a[..], &b[..]);
+
+        let a = b"\nhello\nworld\n";
+        let b = replace_newlines(b"\r\nhello\r\nworld\r\n");
+        assert_eq!(&a[..], &b[..]);
     }
 }
