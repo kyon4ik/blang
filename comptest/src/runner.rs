@@ -169,24 +169,44 @@ impl TestOutput {
         bytes
     }
 
-    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, &'static str> {
         // run_status
-        let (rs, bytes) = bytes.split_first_chunk()?;
-        let run_status = RunStatus::from_bytes(*rs)?;
-        let bytes = bytes.strip_prefix(b"\n")?;
+        let (rs, bytes) = bytes.split_first_chunk().ok_or("spliting run status")?;
+        let run_status = RunStatus::from_bytes(*rs).ok_or("parsing run status")?;
+        let bytes = bytes
+            .strip_prefix(b"\n")
+            .ok_or("newline after run status")?;
         // STDOUT
-        let (num, bytes) = split_once(bytes.strip_prefix(b"STDOUT [")?, b'B')?;
-        let stdout_len = str::from_utf8(num).ok()?.parse::<usize>().ok()?;
-        let bytes = bytes.strip_prefix(b"]:\n")?;
-        let (stdout, bytes) = bytes.split_at_checked(stdout_len)?;
-        let bytes = bytes.strip_prefix(b"\n")?;
+        let (num, bytes) = split_once(
+            bytes.strip_prefix(b"STDOUT [").ok_or("splitting STDOUT")?,
+            b'B',
+        )
+        .ok_or("splitting by B")?;
+        let stdout_len = str::from_utf8(num)
+            .map_err(|_| "parsing num as utf8")?
+            .parse::<usize>()
+            .map_err(|_| "parsing num")?;
+        let bytes = bytes.strip_prefix(b"]:\n").ok_or("splitting ]:")?;
+        let (stdout, bytes) = bytes
+            .split_at_checked(stdout_len)
+            .ok_or("Splitting by len")?;
+        let bytes = bytes.strip_prefix(b"\n").ok_or("newline after STDOUT")?;
         // STDERR
-        let (num, bytes) = split_once(bytes.strip_prefix(b"STDERR [")?, b'B')?;
-        let stderr_len = str::from_utf8(num).ok()?.parse::<usize>().ok()?;
-        let bytes = bytes.strip_prefix(b"]:\n")?;
-        let (stderr, bytes) = bytes.split_at_checked(stderr_len)?;
-        let _bytes = bytes.strip_prefix(b"\n")?;
-        Some(TestOutput {
+        let (num, bytes) = split_once(
+            bytes.strip_prefix(b"STDERR [").ok_or("splitting STDERR")?,
+            b'B',
+        )
+        .ok_or("splitting by B")?;
+        let stderr_len = str::from_utf8(num)
+            .map_err(|_| "parsing num as utf8")?
+            .parse::<usize>()
+            .map_err(|_| "parsing num")?;
+        let bytes = bytes.strip_prefix(b"]:\n").ok_or("splitting ]:")?;
+        let (stderr, bytes) = bytes
+            .split_at_checked(stderr_len)
+            .ok_or("Splitting by len")?;
+        let _bytes = bytes.strip_prefix(b"\n").ok_or("newline after STDERR")?;
+        Ok(TestOutput {
             run_status,
             stdout: stdout.to_vec(),
             stderr: stderr.to_vec(),
