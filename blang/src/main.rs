@@ -115,7 +115,10 @@ fn main() {
             process::exit(0);
         } else {
             // call linker
-            let exe_path = args.output.unwrap_or_else(|| args.input.with_extension(""));
+            let exe_extension = if cfg!(windows) { "exe" } else { "" };
+            let exe_path = args
+                .output
+                .unwrap_or_else(|| args.input.with_extension(exe_extension));
             let linker_output = link_binary(&exe_path, &obj_path, &args.target);
 
             if !args.save_temps {

@@ -30,7 +30,11 @@ fn main() {
 
     let package_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let project_dir = package_dir.parent().unwrap();
-    let compiler_path = project_dir.join("target/debug/blang");
+    let compiler_path = if cfg!(windows) {
+        project_dir.join("target/debug/blang.exe")
+    } else {
+        project_dir.join("target/debug/blang")
+    };
 
     let test_suite_path = &args.tests;
     let test_suite_meta = fs::metadata(test_suite_path).unwrap();
@@ -143,7 +147,7 @@ impl TestStager for QuietStager<'_, '_> {
     fn create(&self, stage: TestStage, test_path: &Path) -> Command {
         match stage {
             TestStage::Compiling => compile_cmd(test_path, self.compiler_path, self.compiler_args),
-            TestStage::Running => Command::new(test_path.with_extension("")),
+            TestStage::Running => Command::new(executable_path(test_path)),
         }
     }
 }
@@ -158,7 +162,7 @@ impl TestStager for LoudStager<'_, '_> {
                 cmd
             }
             TestStage::Running => {
-                let cmd = Command::new(test_path.with_extension(""));
+                let cmd = Command::new(executable_path(test_path));
                 print_command(&cmd);
                 cmd
             }
@@ -206,7 +210,7 @@ fn compile_cmd<S: AsRef<OsStr>>(
     compiler_path: &Path,
     comp_args: &[S],
 ) -> process::Command {
-    let test_exe_path = test_path.with_extension("");
+    let test_exe_path = executable_path(test_path);
     let mut compile_cmd = Command::new(compiler_path);
     compile_cmd
         .arg("-o")
@@ -214,4 +218,12 @@ fn compile_cmd<S: AsRef<OsStr>>(
         .arg(test_path)
         .args(comp_args);
     compile_cmd
+}
+
+fn executable_path(path: &Path) -> PathBuf {
+    if cfg!(windows) {
+        path.with_extension("exe")
+    } else {
+        path.with_extension("")
+    }
 }
