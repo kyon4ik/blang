@@ -1,6 +1,6 @@
 ifeq ($(OS),Windows_NT)
 	COMPILER_PATH := target/debug/blang.exe
-	AR            := lib /OUT:
+	AR            := lib /OUT
 	LIB_EXT       := lib    
 else
 	COMPILER_PATH := target/debug/blang

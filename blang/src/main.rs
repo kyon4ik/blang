@@ -151,7 +151,7 @@ fn link_binary(exe_path: &Path, obj_path: &Path, target: &Triple) -> process::Ou
     let (linker, o_flag) = match target.operating_system {
         Os::MacOSX(_) | Os::Darwin(_) => ("clang", "-o"),
         Os::Linux => ("gcc", "-o"),
-        Os::Windows => ("cl.exe", "/Fe:"),
+        Os::Windows => ("cl", "/Fe"),
         _ => panic!(
             "operating system {} is not supported",
             target.operating_system
