@@ -25,7 +25,10 @@ struct Args {
     /// Enable optimizations
     #[arg(short = 'O')]
     optimize: bool,
-    /// Compile, without linking
+    /// Compile as static library
+    #[arg(short = 's')]
+    static_library: bool,
+    /// Compile without linking
     #[arg(short = 'c')]
     only_compile: bool,
     /// Specify the target  
@@ -44,6 +47,9 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
+    if args.only_compile && args.static_library {
+        panic!("-c and -s can not coexist");
+    }
 
     let mut input_file = File::open(&args.input).unwrap();
     let mut src = Vec::new();
@@ -102,17 +108,36 @@ fn main() {
             println!("Created object file '{}'", obj_path.display());
         }
 
+        println!(
+            "Compiled to '{}' [{}]",
+            obj_path.display(),
+            if args.optimize {
+                "optimized"
+            } else {
+                "unoptimized"
+            }
+        );
         if args.only_compile {
-            println!(
-                "Compiled to '{}' [{}]",
-                obj_path.display(),
-                if args.optimize {
-                    "optimized"
-                } else {
-                    "unoptimized"
-                }
-            );
             process::exit(0);
+        }
+
+        if args.static_library {
+            let lib_extension = if cfg!(windows) { "lib" } else { "a" };
+            let lib_path = args
+                .output
+                .unwrap_or_else(|| args.input.with_extension(lib_extension));
+            let lib_output = create_static_lib(&obj_path, &lib_path, &args.target);
+
+            if !args.save_temps {
+                fs::remove_file(&obj_path).expect("Removing object file");
+                println!("Remove object file '{}'", obj_path.display());
+            }
+
+            if !lib_output.status.success() {
+                eprintln!("Creating static library failed with {}", lib_output.status);
+                io::stderr().write_all(&lib_output.stderr).unwrap();
+                process::exit(1);
+            }
         } else {
             // call linker
             let exe_extension = if cfg!(windows) { "exe" } else { "" };
@@ -126,18 +151,7 @@ fn main() {
                 println!("Remove object file '{}'", obj_path.display());
             }
 
-            if linker_output.status.success() {
-                println!(
-                    "Compiled to '{}' [{}]",
-                    exe_path.display(),
-                    if args.optimize {
-                        "optimized"
-                    } else {
-                        "unoptimized"
-                    }
-                );
-                process::exit(0);
-            } else {
+            if !linker_output.status.success() {
                 eprintln!("Linking failed with {}", linker_output.status);
                 io::stderr().write_all(&linker_output.stderr).unwrap();
                 process::exit(1);
@@ -146,23 +160,70 @@ fn main() {
     }
 }
 
-fn link_binary(exe_path: &Path, obj_path: &Path, target: &Triple) -> process::Output {
+fn create_static_lib(obj_path: &Path, lib_path: &Path, target: &Triple) -> process::Output {
     use target_lexicon::OperatingSystem as Os;
-    let (linker, o_flag) = match target.operating_system {
-        Os::MacOSX(_) | Os::Darwin(_) => ("clang", "-o"),
-        Os::Linux => ("gcc", "-o"),
-        Os::Windows => ("cl", "/Fe"),
+    let mut cmd = match target.operating_system {
+        Os::MacOSX(_) | Os::Darwin(_) => {
+            let mut cmd = Command::new("ar");
+            cmd.arg("rcs").arg(lib_path);
+            cmd
+        }
+        Os::Linux => {
+            let mut cmd = Command::new("ar");
+            cmd.arg("rcs").arg(lib_path);
+            cmd
+        }
+        Os::Windows => {
+            let mut cmd = Command::new("lib");
+            cmd.arg(format!("/OUT:{}", lib_path.display()));
+            cmd
+        }
         _ => panic!(
             "operating system {} is not supported",
             target.operating_system
         ),
     };
-    let mut cmd = Command::new(linker);
-    cmd.arg(o_flag)
-        .arg(exe_path)
-        .arg(obj_path)
-        .args(["-L", "libb"])
-        .args(["-l", "b"]);
+    cmd.arg(obj_path);
+    print!("Running: ");
+    print_command(&cmd);
+    cmd.output().unwrap()
+}
+
+fn link_binary(exe_path: &Path, obj_path: &Path, target: &Triple) -> process::Output {
+    use target_lexicon::OperatingSystem as Os;
+    let libb_path = Path::new("./libb").display();
+    let mut cmd = match target.operating_system {
+        Os::MacOSX(_) | Os::Darwin(_) => {
+            let mut cmd = Command::new("clang");
+            cmd.arg(obj_path)
+                .arg("-o")
+                .arg(exe_path)
+                .arg(format!("-L{libb_path}"))
+                .arg("-lb");
+            cmd
+        }
+        Os::Linux => {
+            let mut cmd = Command::new("gcc");
+            cmd.arg(obj_path)
+                .arg("-o")
+                .arg(exe_path)
+                .arg(format!("-L{libb_path}"))
+                .arg("-lb");
+            cmd
+        }
+        Os::Windows => {
+            let mut cmd = Command::new("cl");
+            cmd.arg(obj_path)
+                .arg(format!("/Fe:{}", exe_path.display()))
+                .arg("/link")
+                .arg(format!("/LIBPATH:{libb_path}\\libb.lib"));
+            cmd
+        }
+        _ => panic!(
+            "operating system {} is not supported",
+            target.operating_system
+        ),
+    };
     print!("Running linker: ");
     print_command(&cmd);
     cmd.output().unwrap()
