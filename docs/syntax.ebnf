@@ -1,0 +1,140 @@
+item = ['private'], (function | struct | global | constant);
+
+global = 'global', typed_field, '=', expression, ';';
+
+constant = 'const', typed_field, '=', expression, ';';   
+
+struct = 'struct', identifier, '{', struct_fields, '}';
+
+struct_fields = typed_field, {',', typed_field}, [','];
+
+function = ['extern'], 'fn', identifier, '(',  [function_parameters], ')', [return_type], function_body;
+
+function_parameters = function_parameter, {',', function_parameter}, [','];
+
+function_parameter = maybe_typed_field | '...';
+
+function_return_type =  ':', identifier;
+
+function_body = ';' | block_statement;
+
+statement = ';'
+	| expression_statement
+	| let_statement
+	| block_statement
+	| if_statement
+	| while_statement
+	| switch_statement
+	| constant;
+
+switch_statement = 'switch', expression, '{', {switch_arm}, '}';
+
+switch_arm = (expression | 'default'), ':', statement;
+
+while_statement = 'while', expression, block_statement;
+
+if_statement = 'if', expression, block_statement, ['else', block_statement];
+
+block_statement = '{', {statement}, '}';
+
+let_statement = 'let', maybe_typed_field, '=', expression, ';';
+
+expression_statement = expression, ';';
+
+maybe_typed_field =  typed_field | identifier;
+typed_field = identifier, ':', identifier;
+
+expression = literal_expression
+	| grouped_expression
+	| unary_expression
+	| binary_expression
+	| cast_expression
+	| assign_expression
+	| assign_op_expression
+	| array_expression
+	| call_expression
+	| field_expression
+	| conditional_expression;
+
+conditional_expression = expression, 'if', expression, 'else', expression;
+
+field_expression = expression, '.', identifier;
+
+call_expression = expression, '(', arguments, ')';
+
+array_expression = '[', [array_elements], ']';
+
+array_elements = arguments | (expression, ';', expression);
+
+arguments = expression, {',', expression}, [','];
+
+assign_op_expression = expression,assign_op,expression;
+
+assign_op = '+=' | '-=' | '*=' | '/=' | '%=' | '&=' | '|=' | '^=' | '>>=' | '<<='; 
+
+assign_expression = expression,'=',expression;
+
+cast_expression = 'cast',identifier,expression; 
+
+binary_expression = expression, binary_op, expression;
+
+binary_op = '+' | '-' | '*' | '/' | '%' | '&' | '|' | '^' | '>>' | '<<' | '||' | '&&';
+
+unary_expression = unary_op, expression;
+
+unary_op = '&' | '*' | '!' | '-';
+
+grouped_expression = '(', [expression], ')';
+
+literal_expression = 'true' | 'false' | literal;
+
+literal = string_literal | char_literal | integer_literal;
+
+string_literal = '"',{character},'"';
+
+char_literal = "'",character,"'";
+
+character = ascii_for_char | escape_sequence;
+
+escape_sequence = simple_escape_sequence | hex_escape_sequence;
+
+hex_escape_sequence = '\x',hex_digit,hex_digit;
+
+simple_escape_sequence = '\',('n'| 'r'| 't'| "'"| '"'| '\'| '0');
+
+ascii_for_string = any_ascii_character-('"' | '\n' |'\r' | '\t' | '\');
+ascii_for_char = any_ascii_character-("'" | '\n' |'\r' | '\t' | '\');
+
+integer_literal = (binary_literal | octal_literal | decimal_literal | hexadecimal_literal),[identifier];
+
+binary_literal = '0b',binary_digit,{binary_digit};
+
+octal_literal = '0o',octal_digit,{octal_digit};
+
+hexadecimal_literal = '0x',hex_digit,{hex_digit};
+
+decimal_literal = digit,{digit};
+
+identifier = identifier_start,{identifier_continue};
+
+identifier_start = '_' | alpha;
+
+identifier_continue = '_' | alpha_digit;
+
+alpha_digit = alpha | digit;
+
+alpha = ('a' | '...' | 'z') | ('A' | '...' | 'Z');
+
+hex_digit = digit | ('A' | '...' | 'F') | ('a' | '...' | 'f');
+
+digit = '0' | '1' | '...' | '9';
+
+octal_digit = '0' | '1' | '...' | '7';
+
+binary_digit = '0' | '1';
+
+comment = line_comment | block_comment;
+
+line_comment = '//', {any_ascii_character-'\n'};
+
+block_comment = '/*', (any_ascii_character | block_comment), {(any_ascii_character | block_comment)}, '*/';
