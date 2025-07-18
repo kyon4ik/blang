@@ -138,3 +138,5 @@ comment = line_comment | block_comment;
 line_comment = '//', {any_ascii_character-'\n'};
 
 block_comment = '/*', (any_ascii_character | block_comment), {(any_ascii_character | block_comment)}, '*/';
+
+whitespace = '\n' | '\t' | ' ' | '\r' | '\f' | '\v';
