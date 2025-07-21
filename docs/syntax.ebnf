@@ -1,6 +1,6 @@
-item = ['private'], (function | struct | global | constant);
+item = ['global'], (function | struct | static | constant);
 
-global = 'global', typed_field, '=', expression, ';';
+static = 'static', typed_field, '=', expression, ';';
 
 constant = 'const', typed_field, '=', expression, ';';   
 
@@ -78,7 +78,8 @@ cast_expression = 'cast',identifier,expression;
 
 binary_expression = expression, binary_op, expression;
 
-binary_op = '+' | '-' | '*' | '/' | '%' | '&' | '|' | '^' | '>>' | '<<' | '||' | '&&';
+binary_op = '+' | '-' | '*' | '/' | '%' | '&' | '|' | '^' | '>>' | '<<' | '||' | '&&' |
+	'==' | '!=' | '<' | '>' | '<=' | '>=';
 
 unary_expression = unary_op, expression;
 

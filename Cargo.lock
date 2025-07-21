@@ -82,6 +82,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "beta_lexer"
+version = "0.1.0"
+
+[[package]]
 name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,6 +1,9 @@
 use ascii::AChar;
 
-mod ascii;
+pub mod ascii;
+pub mod keyword;
+pub mod symbol;
+pub mod token;
 
 #[inline]
 pub const fn is_ident_continue(c: AChar) -> bool {

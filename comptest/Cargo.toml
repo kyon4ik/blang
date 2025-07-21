@@ -1,9 +1,0 @@
-[package]
-name = "comptest"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-anstream = "0.6"
-anstyle = "1.0"
-clap.workspace = true
